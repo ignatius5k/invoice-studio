@@ -1,0 +1,8 @@
+.venv/
+tmp/
+node_modules/
+.playwright-mcp/
+design-directions/
+.DS_Store
+Thumbs.db
+*.log

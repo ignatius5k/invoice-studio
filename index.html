@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#f2f3f5" />
+    <meta name="description" content="Create print-ready Eng Hoon Residences invoices in under a minute." />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self'; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="icon" href="./icon-192.png" />
+    <link rel="apple-touch-icon" href="./icon-192.png" />
+    <link rel="stylesheet" href="./styles.css" />
+    <title>Invoice Studio</title>
+  </head>
+  <body>
+    <div id="offlineBanner" class="offline-banner" role="status" hidden>
+      You are offline. Your draft is saved on this device and printing still works.
+    </div>
+
+    <header class="app-header">
+      <div class="brand-lockup">
+        <img src="./eng-hoon-residences-logo.jpeg" alt="" width="44" height="44" />
+        <div>
+          <p class="brand-name">Invoice Studio</p>
+          <p class="brand-subtitle">Eng Hoon Residences</p>
+        </div>
+      </div>
+      <div class="header-actions">
+        <button id="installButton" class="button button-secondary" type="button" hidden>Install app</button>
+        <button id="newInvoiceButton" class="button button-secondary" type="button">New invoice</button>
+        <button id="printButton" class="button button-primary" type="button">Print / Save PDF</button>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <section class="editor-panel" aria-labelledby="editorTitle">
+        <div class="panel-heading">
+          <div>
+            <p class="section-kicker">Invoice editor</p>
+            <h1 id="editorTitle">Create an invoice</h1>
+          </div>
+          <p id="saveStatus" class="save-status" role="status" aria-live="polite">Draft ready</p>
+        </div>
+
+        <form id="invoiceForm" novalidate>
+          <fieldset class="form-section">
+            <legend>Invoice details</legend>
+            <div class="field-stack">
+              <label for="invoiceNumber">Invoice number</label>
+              <input id="invoiceNumber" name="invoiceNumber" data-field="invoiceNumber" type="text" autocomplete="off" required />
+            </div>
+            <div class="field-grid field-grid-two">
+              <div class="field-stack">
+                <label for="invoiceDate">Invoice date</label>
+                <input id="invoiceDate" name="invoiceDate" data-field="invoiceDate" type="date" required />
+              </div>
+              <div class="field-stack">
+                <label for="dueDate">Due date</label>
+                <input id="dueDate" name="dueDate" data-field="dueDate" type="date" required />
+              </div>
+            </div>
+          </fieldset>
+
+          <fieldset class="form-section">
+            <legend>Bill to</legend>
+            <div class="field-stack">
+              <label for="billTo">Customer or company name</label>
+              <textarea id="billTo" name="billTo" data-field="billTo" rows="2" required></textarea>
+              <p class="field-help">This appears in the invoice's BILL TO section.</p>
+            </div>
+          </fieldset>
+
+          <fieldset class="form-section items-section">
+            <div class="legend-row">
+              <legend>Products / services</legend>
+              <span class="currency-label">SGD</span>
+            </div>
+            <div class="item-column-labels" aria-hidden="true">
+              <span>Qty</span>
+              <span>Item</span>
+              <span>Price</span>
+              <span></span>
+            </div>
+            <div id="itemsEditor" class="items-editor"></div>
+            <button id="addItemButton" class="button button-secondary add-item-button" type="button">Add item</button>
+            <div class="editor-total" aria-live="polite">
+              <span>Total</span>
+              <strong id="editorTotal">$0.00</strong>
+            </div>
+          </fieldset>
+        </form>
+
+        <div class="mobile-output-action">
+          <button id="mobileNewInvoiceButton" class="button button-secondary" type="button">New invoice</button>
+          <button id="mobilePrintButton" class="button button-primary" type="button">Print / Save PDF</button>
+        </div>
+        <button id="clearDraftButton" class="clear-draft-button" type="button">Clear saved draft</button>
+      </section>
+
+      <section class="preview-panel" aria-labelledby="previewTitle">
+        <div class="preview-toolbar">
+          <div>
+            <h2 id="previewTitle">Invoice preview</h2>
+            <p>A4, 210 x 297 mm</p>
+          </div>
+          <span class="preview-hint">Updates as you type</span>
+        </div>
+        <div id="previewStage" class="preview-stage">
+          <div id="paperScaleWrap" class="paper-scale-wrap">
+            <article id="invoiceSheet" class="invoice-sheet" aria-label="Printable invoice">
+              <header class="invoice-header">
+                <div class="invoice-heading-block">
+                  <h2>INVOICE</h2>
+                  <dl class="invoice-meta">
+                    <div>
+                      <dt>Invoice Number:</dt>
+                      <dd id="previewInvoiceNumber"></dd>
+                    </div>
+                    <div>
+                      <dt>Invoice Date:</dt>
+                      <dd id="previewInvoiceDate"></dd>
+                    </div>
+                    <div>
+                      <dt>Invoice Due Date:</dt>
+                      <dd id="previewDueDate"></dd>
+                    </div>
+                  </dl>
+                </div>
+                <img class="invoice-logo" src="./eng-hoon-residences-logo.jpeg" alt="Eng Hoon Residences" width="132" height="134" />
+              </header>
+
+              <section class="billing-grid" aria-label="Billing parties">
+                <div>
+                  <p class="invoice-label">BILL FROM</p>
+                  <p class="invoice-party"><strong>TIONG BAHRU SERVICED APARTMENTS PTE LTD</strong><br />UEN: 201420098R</p>
+                </div>
+                <div>
+                  <p class="invoice-label">BILL TO</p>
+                  <p id="previewBillTo" class="invoice-party invoice-party-to"></p>
+                </div>
+              </section>
+
+              <table class="invoice-table">
+                <colgroup>
+                  <col class="serial-column" />
+                  <col />
+                  <col class="symbol-column" />
+                  <col class="value-column" />
+                </colgroup>
+                <thead>
+                  <tr>
+                    <th scope="col">S/N</th>
+                    <th scope="col">PRODUCTS / SERVICES</th>
+                    <th scope="col" colspan="2">AMOUNT</th>
+                  </tr>
+                </thead>
+                <tbody id="previewItems"></tbody>
+                <tfoot>
+                  <tr>
+                    <th scope="row" colspan="2">TOTAL</th>
+                    <td>$</td>
+                    <td id="previewTotal">0.00</td>
+                  </tr>
+                </tfoot>
+              </table>
+
+              <section class="invoice-notes" aria-label="Booking terms">
+                <p>Please note that all payments made for pop-up booth bookings are non-refundable upon confirmation, as the space will be reserved exclusively for you.</p>
+                <p>Should you be unable to participate, we may, at our discretion and subject to availability, allow your booking to be transferred to a replacement date or future pop-up event.</p>
+              </section>
+
+              <section class="payment-section" aria-label="Payment modes">
+                <h3>PAYMENT MODES</h3>
+                <div class="payment-detail">
+                  <strong>PAYNOW</strong><br />
+                  COMPANY NAME: <strong>TIONG BAHRU SERVICED APARTMENTS PTE LTD</strong><br />
+                  UEN: <strong>201420098R</strong>
+                </div>
+              </section>
+
+              <footer class="invoice-footer">
+                <p>sgtbsapl@gmail.com<br />instagram.com/enghoonresidences</p>
+              </footer>
+            </article>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+    <noscript>This app needs JavaScript to create invoices.</noscript>
+    <script src="./app.js" defer></script>
+  </body>
+</html>

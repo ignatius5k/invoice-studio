@@ -1,0 +1,10 @@
+{
+  "name": "invoice-studio",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Fast, offline-capable invoice generator for Eng Hoon Residences.",
+  "scripts": {
+    "check": "node --check app.js && node --check sw.js",
+    "test": "npm run check"
+  }
+}
