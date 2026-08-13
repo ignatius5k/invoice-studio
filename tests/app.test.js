@@ -209,6 +209,21 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
   })()`);
   assert.equal(longDescriptionFits, true);
 
+  const multilineDescription = JSON.parse(await evaluate(page, `(() => {
+    const description = document.querySelector('[data-item-field="description"]');
+    description.value = 'First line\\nSecond line';
+    description.dispatchEvent(new Event('input', { bubbles: true }));
+    const preview = document.querySelector('#previewItems td:nth-child(2)');
+    return JSON.stringify({
+      text: preview.textContent,
+      whiteSpace: getComputedStyle(preview).whiteSpace,
+      height: preview.getBoundingClientRect().height
+    });
+  })()`));
+  assert.equal(multilineDescription.text, "First line\nSecond line");
+  assert.equal(multilineDescription.whiteSpace, "pre-wrap");
+  assert.ok(multilineDescription.height > 20, "two-line preview should be taller than one line");
+
   await evaluate(page, `(() => {
     const billTo = document.querySelector('#billTo');
     const quantity = document.querySelector('[data-item-field="quantity"]');
@@ -297,12 +312,12 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
   })()`);
   assert.deepEqual(JSON.parse(printCount), { prints: 1, invalid: 0 });
 
-  const cacheReady = await waitFor(() => evaluate(page, "caches.keys().then(keys => keys.includes('invoice-studio-v12'))"));
+  const cacheReady = await waitFor(() => evaluate(page, "caches.keys().then(keys => keys.includes('invoice-studio-v13'))"));
   assert.equal(cacheReady, true);
   const workerSource = await readFile(join(ROOT, "sw.js"), "utf8");
   const handlers = {};
   const deletedCaches = [];
-  const cacheKeys = ["invoice-studio-v1", "invoice-studio-v12", "unrelated-app-cache"];
+  const cacheKeys = ["invoice-studio-v1", "invoice-studio-v13", "unrelated-app-cache"];
   const workerContext = {
     URL,
     Response,
