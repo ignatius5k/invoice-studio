@@ -138,6 +138,70 @@ function createField(className, label, input) {
   return wrapper;
 }
 
+function stripBoldMarkers(value) {
+  return String(value || "").replaceAll("**", "");
+}
+
+function updateDescriptionValidity(input) {
+  input.setCustomValidity(stripBoldMarkers(input.value).trim() ? "" : "Enter an item description.");
+}
+
+function toggleBoldFormatting(input) {
+  const start = input.selectionStart;
+  const end = input.selectionEnd;
+  const value = input.value;
+  const selected = value.slice(start, end);
+  let nextValue;
+  let nextStart;
+  let nextEnd;
+
+  if (start === end) {
+    nextValue = `${value.slice(0, start)}****${value.slice(end)}`;
+    nextStart = start + 2;
+    nextEnd = nextStart;
+  } else if (value.slice(start - 2, start) === "**" && value.slice(end, end + 2) === "**") {
+    nextValue = `${value.slice(0, start - 2)}${selected}${value.slice(end + 2)}`;
+    nextStart = start - 2;
+    nextEnd = end - 2;
+  } else if (selected.startsWith("**") && selected.endsWith("**") && selected.length > 4) {
+    const unwrapped = selected.slice(2, -2);
+    nextValue = `${value.slice(0, start)}${unwrapped}${value.slice(end)}`;
+    nextStart = start;
+    nextEnd = start + unwrapped.length;
+  } else {
+    nextValue = `${value.slice(0, start)}**${selected}**${value.slice(end)}`;
+    nextStart = start + 2;
+    nextEnd = end + 2;
+  }
+
+  input.value = nextValue;
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  input.setSelectionRange(nextStart, nextEnd);
+}
+
+function renderFormattedDescription(container, value) {
+  container.replaceChildren();
+  let cursor = 0;
+
+  while (cursor < value.length) {
+    const opening = value.indexOf("**", cursor);
+    if (opening === -1) {
+      container.append(document.createTextNode(value.slice(cursor)));
+      break;
+    }
+    const closing = value.indexOf("**", opening + 2);
+    if (closing === -1) {
+      container.append(document.createTextNode(value.slice(cursor)));
+      break;
+    }
+    if (opening > cursor) container.append(document.createTextNode(value.slice(cursor, opening)));
+    const strong = document.createElement("strong");
+    strong.textContent = value.slice(opening + 2, closing);
+    container.append(strong);
+    cursor = closing + 2;
+  }
+}
+
 function renderItemsEditor() {
   itemsEditor.replaceChildren();
 
@@ -174,6 +238,15 @@ function renderItemsEditor() {
     description.required = true;
     description.dataset.itemField = "description";
     description.setAttribute("aria-label", `Description for item ${index + 1}`);
+    description.setAttribute("aria-describedby", "itemFormattingHelp");
+    description.setAttribute("aria-keyshortcuts", "Control+B Meta+B");
+    updateDescriptionValidity(description);
+    description.addEventListener("keydown", (event) => {
+      if (event.key.toLowerCase() === "b" && (event.ctrlKey || event.metaKey) && !event.altKey) {
+        event.preventDefault();
+        toggleBoldFormatting(description);
+      }
+    });
 
     const price = document.createElement("input");
     price.type = "number";
@@ -224,7 +297,7 @@ function renderPreview() {
     const symbol = document.createElement("td");
     const amount = document.createElement("td");
     number.textContent = String(index + 1);
-    description.textContent = item.description || "";
+    renderFormattedDescription(description, item.description || "");
     symbol.textContent = "$";
     symbol.className = "amount-symbol";
     amount.textContent = formatAmount((Number(item.quantity) || 0) * (Number(item.price) || 0));
@@ -258,6 +331,7 @@ function handleItemInput(event) {
     item.price = event.target.value === "" ? "" : Number(event.target.value);
   } else {
     item.description = event.target.value;
+    updateDescriptionValidity(event.target);
   }
   renderPreview();
   saveDraft();
@@ -327,7 +401,7 @@ function hasEnteredContent() {
   return Boolean(
     state.billTo?.trim()
     || state.items.length > 1
-    || state.items.some((item) => item.description?.trim() || item.price !== ""),
+    || state.items.some((item) => stripBoldMarkers(item.description).trim() || item.price !== ""),
   );
 }
 

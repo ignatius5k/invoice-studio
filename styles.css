@@ -309,6 +309,10 @@ h1 {
   line-height: 1.35;
 }
 
+.item-formatting-help {
+  margin: 3px 0 12px;
+}
+
 .legend-row {
   justify-content: space-between;
 }

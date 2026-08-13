@@ -213,14 +213,22 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
     const description = document.querySelector('[data-item-field="description"]');
     description.value = 'First line\\nSecond line';
     description.dispatchEvent(new Event('input', { bubbles: true }));
+    description.setSelectionRange(11, 22);
+    description.dispatchEvent(new KeyboardEvent('keydown', { key: 'b', ctrlKey: true, bubbles: true }));
     const preview = document.querySelector('#previewItems td:nth-child(2)');
     return JSON.stringify({
+      editorValue: description.value,
       text: preview.textContent,
+      boldText: preview.querySelector('strong')?.textContent,
+      shortcuts: description.getAttribute('aria-keyshortcuts'),
       whiteSpace: getComputedStyle(preview).whiteSpace,
       height: preview.getBoundingClientRect().height
     });
   })()`));
+  assert.equal(multilineDescription.editorValue, "First line\n**Second line**");
   assert.equal(multilineDescription.text, "First line\nSecond line");
+  assert.equal(multilineDescription.boldText, "Second line");
+  assert.equal(multilineDescription.shortcuts, "Control+B Meta+B");
   assert.equal(multilineDescription.whiteSpace, "pre-wrap");
   assert.ok(multilineDescription.height > 20, "two-line preview should be taller than one line");
 
@@ -312,12 +320,12 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
   })()`);
   assert.deepEqual(JSON.parse(printCount), { prints: 1, invalid: 0 });
 
-  const cacheReady = await waitFor(() => evaluate(page, "caches.keys().then(keys => keys.includes('invoice-studio-v13'))"));
+  const cacheReady = await waitFor(() => evaluate(page, "caches.keys().then(keys => keys.includes('invoice-studio-v14'))"));
   assert.equal(cacheReady, true);
   const workerSource = await readFile(join(ROOT, "sw.js"), "utf8");
   const handlers = {};
   const deletedCaches = [];
-  const cacheKeys = ["invoice-studio-v1", "invoice-studio-v13", "unrelated-app-cache"];
+  const cacheKeys = ["invoice-studio-v1", "invoice-studio-v14", "unrelated-app-cache"];
   const workerContext = {
     URL,
     Response,

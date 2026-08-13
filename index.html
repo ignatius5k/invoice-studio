@@ -9,7 +9,7 @@
     <link rel="manifest" href="./manifest.webmanifest" />
     <link rel="icon" href="./icon-192.png" />
     <link rel="apple-touch-icon" href="./icon-192.png" />
-    <link rel="stylesheet" href="./styles.css?v=13" />
+    <link rel="stylesheet" href="./styles.css?v=14" />
     <title>Invoice Studio</title>
   </head>
   <body>
@@ -82,6 +82,7 @@
               <span></span>
             </div>
             <div id="itemsEditor" class="items-editor"></div>
+            <p id="itemFormattingHelp" class="field-help item-formatting-help">Select item text and press Ctrl+B (Cmd+B on Mac) to bold it.</p>
             <button id="addItemButton" class="button button-secondary add-item-button" type="button">Add item</button>
             <div class="editor-total" aria-live="polite">
               <span>Total</span>
@@ -189,6 +190,6 @@
 
     <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
     <noscript>This app needs JavaScript to create invoices.</noscript>
-    <script src="./app.js?v=12" defer></script>
+    <script src="./app.js?v=14" defer></script>
   </body>
 </html>
