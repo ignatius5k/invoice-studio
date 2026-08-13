@@ -1,4 +1,4 @@
-const CACHE_NAME = "invoice-studio-v7";
+const CACHE_NAME = "invoice-studio-v8";
 const APP_SHELL = [
   "./",
   "./index.html",

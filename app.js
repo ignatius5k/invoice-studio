@@ -39,10 +39,20 @@ function loadDraft() {
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     if (!parsed || !Array.isArray(parsed.items)) return null;
+    parsed.items = parsed.items.map((item) => ({
+      ...item,
+      quantity: normalizeQuantity(item.quantity),
+    }));
     return parsed;
   } catch {
     return null;
   }
+}
+
+function normalizeQuantity(value) {
+  const quantity = Number(value);
+  if (!Number.isFinite(quantity)) return 1;
+  return Math.max(1, Math.round(quantity));
 }
 
 function saveDraft() {
@@ -109,13 +119,16 @@ function renderItemsEditor() {
 
     const quantity = document.createElement("input");
     quantity.type = "number";
-    quantity.min = "0.01";
-    quantity.step = "0.01";
-    quantity.inputMode = "decimal";
-    quantity.value = item.quantity;
+    quantity.min = "1";
+    quantity.step = "1";
+    quantity.inputMode = "numeric";
+    quantity.value = normalizeQuantity(item.quantity);
     quantity.required = true;
     quantity.dataset.itemField = "quantity";
     quantity.setAttribute("aria-label", `Quantity for item ${index + 1}`);
+    quantity.addEventListener("keydown", (event) => {
+      if ([".", ",", "e", "E", "+", "-"].includes(event.key)) event.preventDefault();
+    });
 
     const description = document.createElement("textarea");
     description.rows = 2;
@@ -194,7 +207,16 @@ function handleItemInput(event) {
   const row = event.target.closest(".item-row");
   const item = state.items.find((candidate) => candidate.id === row?.dataset.itemId);
   if (!item) return;
-  item[field] = field === "description" ? event.target.value : Number(event.target.value);
+  if (field === "quantity") {
+    if (event.target.value === "") {
+      item.quantity = "";
+    } else {
+      item.quantity = normalizeQuantity(event.target.value);
+      event.target.value = item.quantity;
+    }
+  } else {
+    item[field] = field === "description" ? event.target.value : Number(event.target.value);
+  }
   renderPreview();
   saveDraft();
 }
