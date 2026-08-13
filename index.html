@@ -65,8 +65,8 @@
             <legend>Bill to</legend>
             <div class="field-stack">
               <label for="billTo">Customer or company name</label>
-              <textarea id="billTo" name="billTo" data-field="billTo" rows="2" required></textarea>
-              <p class="field-help">This appears in the invoice's BILL TO section.</p>
+              <textarea id="billTo" name="billTo" data-field="billTo" rows="2" aria-describedby="billToHelp" required></textarea>
+              <p id="billToHelp" class="field-help">This appears in the invoice's BILL TO section.</p>
             </div>
           </fieldset>
 
@@ -189,6 +189,6 @@
 
     <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
     <noscript>This app needs JavaScript to create invoices.</noscript>
-    <script src="./app.js?v=11" defer></script>
+    <script src="./app.js?v=12" defer></script>
   </body>
 </html>

@@ -6,7 +6,7 @@
   --ink: #17191c;
   --muted: #62676f;
   --line: #d8dbe0;
-  --line-strong: #a9aeb6;
+  --line-strong: #7f858e;
   --accent: #215da7;
   --accent-dark: #17477f;
   --danger: #a52d2d;
@@ -43,6 +43,16 @@ textarea {
   font: inherit;
 }
 
+input[type="number"] {
+  appearance: textfield;
+}
+
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  margin: 0;
+  appearance: none;
+}
+
 button {
   cursor: pointer;
 }
@@ -77,7 +87,9 @@ textarea:focus {
 }
 
 input:user-invalid,
-textarea:user-invalid {
+textarea:user-invalid,
+input[aria-invalid="true"],
+textarea[aria-invalid="true"] {
   border-color: var(--danger);
 }
 
@@ -166,6 +178,14 @@ textarea:user-invalid {
   transform: translateY(1px) scale(0.99);
 }
 
+.button:disabled {
+  color: #858a92;
+  border-color: var(--line);
+  cursor: not-allowed;
+  background: #f1f2f3;
+  transform: none;
+}
+
 .button-primary {
   color: #fff;
   border: 1px solid #111316;
@@ -239,6 +259,7 @@ h1 {
 
 .form-section {
   min-width: 0;
+  min-inline-size: 0;
   margin: 0 0 16px;
   padding: 17px;
   border: 1px solid var(--line);
@@ -280,6 +301,14 @@ h1 {
   line-height: 1.45;
 }
 
+.field-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
 .legend-row {
   justify-content: space-between;
 }
@@ -315,15 +344,31 @@ h1 {
 }
 
 .remove-item {
+  display: grid;
+  place-items: center;
   width: 44px;
+  max-width: 100%;
   min-height: 44px;
   padding: 0;
+  overflow: hidden;
   color: var(--danger);
   border: 1px solid var(--line-strong);
   border-radius: 7px;
   background: var(--paper);
-  font-size: 20px;
+  font-size: 24px;
+  font-weight: 400;
   line-height: 1;
+  transition: color 160ms ease, border-color 160ms ease, background-color 160ms ease;
+}
+
+.remove-item:not(:disabled):hover {
+  color: #7f2020;
+  border-color: #cb8e8e;
+  background: #fff5f5;
+}
+
+.remove-item:not(:disabled):active {
+  background: #fbe8e8;
 }
 
 .remove-item:disabled {
@@ -534,7 +579,9 @@ h1 {
 }
 
 .invoice-table tbody td:nth-child(2) {
+  overflow-wrap: anywhere;
   text-transform: uppercase;
+  word-break: break-word;
 }
 
 .invoice-table .amount-symbol {
@@ -616,7 +663,7 @@ noscript {
   background: var(--danger);
 }
 
-@media (max-width: 1120px) {
+@media (max-width: 1280px) {
   .workspace {
     grid-template-columns: 1fr;
   }
@@ -703,10 +750,10 @@ noscript {
   }
 
   .remove-item {
-    width: 100%;
+    justify-self: end;
+    width: 44px;
     color: var(--danger);
-    font-size: 14px;
-    font-weight: 720;
+    font-size: 24px;
   }
 
   .mobile-output-action {

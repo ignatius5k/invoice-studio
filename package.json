@@ -4,7 +4,7 @@
   "private": true,
   "description": "Fast, offline-capable invoice generator for Eng Hoon Residences.",
   "scripts": {
-    "check": "node --check app.js && node --check sw.js",
-    "test": "npm run check"
+    "check": "node --check app.js && node --check sw.js && node --check tests/app.test.js",
+    "test": "npm run check && node --test tests/app.test.js"
   }
 }
