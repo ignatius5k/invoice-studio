@@ -127,6 +127,13 @@ function renderItemsEditor() {
     quantity.dataset.itemField = "quantity";
     quantity.setAttribute("aria-label", `Quantity for item ${index + 1}`);
     quantity.addEventListener("keydown", (event) => {
+      if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+        event.preventDefault();
+        const direction = event.key === "ArrowUp" ? 1 : -1;
+        quantity.value = Math.max(1, normalizeQuantity(quantity.value) + direction);
+        quantity.dispatchEvent(new Event("input", { bubbles: true }));
+        return;
+      }
       if ([".", ",", "e", "E", "+", "-"].includes(event.key)) event.preventDefault();
     });
 
