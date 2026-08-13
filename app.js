@@ -29,6 +29,7 @@ function loadDraft() {
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     if (!parsed || !Array.isArray(parsed.items) || parsed.items.length === 0) return null;
+    parsed.pdfFileName = parsed.pdfFileName || parsed.invoiceNumber || "invoice";
     parsed.items = parsed.items.slice(0, 5).map((item) => ({
       ...item,
       quantity: normalizeQuantity(item.quantity),
@@ -50,8 +51,10 @@ function createInvoiceDraft() {
   const today = new Date();
   const due = new Date(today);
   due.setDate(due.getDate() + 7);
+  const invoiceNumber = nextInvoiceNumber(today);
   return {
-    invoiceNumber: nextInvoiceNumber(today),
+    invoiceNumber,
+    pdfFileName: invoiceNumber,
     invoiceDate: isoDate(today),
     dueDate: isoDate(due),
     billTo: "",
@@ -112,6 +115,20 @@ function formatDate(value) {
 function formatAmount(value) {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric.toFixed(2) : "—";
+}
+
+function safePdfFileName(value, fallback) {
+  const withoutExtension = String(value || "").trim().replace(/\.pdf$/i, "");
+  const cleaned = withoutExtension
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "-")
+    .replace(/\s+/g, " ")
+    .replace(/[. ]+$/g, "")
+    .slice(0, 120);
+  const fallbackName = String(fallback || "invoice")
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "-")
+    .replace(/[. ]+$/g, "")
+    .slice(0, 120);
+  return cleaned || fallbackName || "invoice";
 }
 
 function invoiceTotal() {
@@ -468,7 +485,7 @@ function printInvoice() {
     showToast("This invoice is too long for the one-page template. Shorten an item or remove a row.");
     return;
   }
-  document.title = `${state.invoiceNumber || "invoice"}.pdf`;
+  document.title = `${safePdfFileName(state.pdfFileName, state.invoiceNumber)}.pdf`;
   window.print();
   window.setTimeout(() => {
     document.title = "Invoice Studio";

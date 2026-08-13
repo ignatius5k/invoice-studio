@@ -49,6 +49,11 @@
               <label for="invoiceNumber">Invoice number</label>
               <input id="invoiceNumber" name="invoiceNumber" data-field="invoiceNumber" type="text" autocomplete="off" required />
             </div>
+            <div class="field-stack">
+              <label for="pdfFileName">PDF file name</label>
+              <input id="pdfFileName" name="pdfFileName" data-field="pdfFileName" type="text" autocomplete="off" aria-describedby="pdfFileNameHelp" />
+              <p id="pdfFileNameHelp" class="field-help">Used when saving or printing. The .pdf extension is added automatically.</p>
+            </div>
             <div class="field-grid field-grid-two">
               <div class="field-stack">
                 <label for="invoiceDate">Invoice date</label>
@@ -190,6 +195,6 @@
 
     <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
     <noscript>This app needs JavaScript to create invoices.</noscript>
-    <script src="./app.js?v=14" defer></script>
+    <script src="./app.js?v=15" defer></script>
   </body>
 </html>

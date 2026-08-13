@@ -144,6 +144,7 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
   await waitFor(() => evaluate(page, "document.readyState === 'complete' && document.querySelectorAll('.item-row').length === 1"));
   const cleanDraft = await evaluate(page, `JSON.stringify({
     invoiceNumber: document.querySelector('#invoiceNumber').value,
+    pdfFileName: document.querySelector('#pdfFileName').value,
     invoiceDate: document.querySelector('#invoiceDate').value,
     dueDate: document.querySelector('#dueDate').value,
     billTo: document.querySelector('#billTo').value,
@@ -152,6 +153,7 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
   })`);
   const initial = JSON.parse(cleanDraft);
   assert.match(initial.invoiceNumber, /^EHR-\d{8}-001$/);
+  assert.equal(initial.pdfFileName, initial.invoiceNumber);
   assert.match(initial.invoiceDate, /^\d{4}-\d{2}-\d{2}$/);
   assert.match(initial.dueDate, /^\d{4}-\d{2}-\d{2}$/);
   assert.deepEqual({ billTo: initial.billTo, description: initial.description, price: initial.price }, { billTo: "", description: "", price: "" });
@@ -310,22 +312,22 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
   assert.deepEqual(overflowBlocked, { prints: 0, total: "$—", invalid: "true" });
 
   const printCount = await evaluate(page, `(() => {
-    window.__prints = 0; window.print = () => { window.__prints += 1; };
-    const values = { invoiceNumber: 'INV-1', invoiceDate: '2026-08-13', dueDate: '2026-08-20', billTo: 'Customer' };
+    window.__prints = 0; window.__printedTitle = ''; window.print = () => { window.__prints += 1; window.__printedTitle = document.title; };
+    const values = { invoiceNumber: 'INV-1', pdfFileName: 'August / Brew Invoice.pdf', invoiceDate: '2026-08-13', dueDate: '2026-08-20', billTo: 'Customer' };
     for (const [id, value] of Object.entries(values)) { const input = document.querySelector('#' + id); input.value = value; input.dispatchEvent(new Event('input', { bubbles: true })); }
     const description = document.querySelector('[data-item-field="description"]'); description.value = 'Service'; description.dispatchEvent(new Event('input', { bubbles: true }));
     const price = document.querySelector('[data-item-field="price"]'); price.value = '25'; price.dispatchEvent(new Event('input', { bubbles: true }));
     document.querySelector('#printButton').click();
-    return JSON.stringify({ prints: window.__prints, invalid: document.querySelectorAll('[aria-invalid="true"]').length });
+    return JSON.stringify({ prints: window.__prints, printedTitle: window.__printedTitle, invalid: document.querySelectorAll('[aria-invalid="true"]').length });
   })()`);
-  assert.deepEqual(JSON.parse(printCount), { prints: 1, invalid: 0 });
+  assert.deepEqual(JSON.parse(printCount), { prints: 1, printedTitle: "August - Brew Invoice.pdf", invalid: 0 });
 
-  const cacheReady = await waitFor(() => evaluate(page, "caches.keys().then(keys => keys.includes('invoice-studio-v14'))"));
+  const cacheReady = await waitFor(() => evaluate(page, "caches.keys().then(keys => keys.includes('invoice-studio-v15'))"));
   assert.equal(cacheReady, true);
   const workerSource = await readFile(join(ROOT, "sw.js"), "utf8");
   const handlers = {};
   const deletedCaches = [];
-  const cacheKeys = ["invoice-studio-v1", "invoice-studio-v14", "unrelated-app-cache"];
+  const cacheKeys = ["invoice-studio-v1", "invoice-studio-v15", "unrelated-app-cache"];
   const workerContext = {
     URL,
     Response,
