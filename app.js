@@ -2,21 +2,6 @@ const STORAGE_KEY = "invoice-studio-draft-v1";
 const PAPER_WIDTH = 793.7;
 const PAPER_HEIGHT = 1122.52;
 
-const sampleInvoice = {
-  invoiceNumber: "EHR-15AUGPOPUP-THEBREWTHERAPY",
-  invoiceDate: "2026-07-17",
-  dueDate: "2026-07-24",
-  billTo: "THE BREW THERAPY",
-  items: [
-    {
-      id: "item-1",
-      quantity: 1,
-      description: "ENG HOON RESIDENCES UNIT 1A: POP UP BOOTH SPACE FOR 15 & 16 AUGUST 2026",
-      price: 450,
-    },
-  ],
-};
-
 const form = document.querySelector("#invoiceForm");
 const itemsEditor = document.querySelector("#itemsEditor");
 const previewItems = document.querySelector("#previewItems");
@@ -28,7 +13,7 @@ const toast = document.querySelector("#toast");
 const installButton = document.querySelector("#installButton");
 const offlineBanner = document.querySelector("#offlineBanner");
 
-let state = loadDraft() ?? structuredClone(sampleInvoice);
+let state = loadDraft() ?? createInvoiceDraft();
 let saveTimer;
 let toastTimer;
 let installPrompt;
@@ -42,6 +27,7 @@ function loadDraft() {
     parsed.items = parsed.items.map((item) => ({
       ...item,
       quantity: normalizeQuantity(item.quantity),
+      price: Number(item.price) === 0 && !String(item.description || "").trim() ? "" : item.price,
     }));
     return parsed;
   } catch {
@@ -53,6 +39,20 @@ function normalizeQuantity(value) {
   const quantity = Number(value);
   if (!Number.isFinite(quantity)) return 1;
   return Math.max(1, Math.round(quantity));
+}
+
+function createInvoiceDraft() {
+  const today = new Date();
+  const due = new Date(today);
+  due.setDate(due.getDate() + 7);
+  const compactDate = isoDate(today).replaceAll("-", "");
+  return {
+    invoiceNumber: `EHR-${compactDate}-001`,
+    invoiceDate: isoDate(today),
+    dueDate: isoDate(due),
+    billTo: "",
+    items: [{ id: `item-${Date.now()}`, quantity: 1, description: "", price: "" }],
+  };
 }
 
 function saveDraft() {
@@ -214,8 +214,10 @@ function handleItemInput(event) {
       item.quantity = normalizeQuantity(event.target.value);
       event.target.value = item.quantity;
     }
+  } else if (field === "price") {
+    item.price = event.target.value === "" ? "" : Number(event.target.value);
   } else {
-    item[field] = field === "description" ? event.target.value : Number(event.target.value);
+    item.description = event.target.value;
   }
   renderPreview();
   saveDraft();
@@ -230,7 +232,7 @@ function addItem() {
     id: `item-${Date.now()}-${Math.random().toString(16).slice(2)}`,
     quantity: 1,
     description: "",
-    price: 0,
+    price: "",
   };
   state.items.push(item);
   renderItemsEditor();
@@ -256,17 +258,7 @@ function isoDate(date) {
 }
 
 function newInvoice() {
-  const today = new Date();
-  const due = new Date(today);
-  due.setDate(due.getDate() + 7);
-  const compactDate = isoDate(today).replaceAll("-", "");
-  state = {
-    invoiceNumber: `EHR-${compactDate}-001`,
-    invoiceDate: isoDate(today),
-    dueDate: isoDate(due),
-    billTo: "",
-    items: [{ id: `item-${Date.now()}`, quantity: 1, description: "", price: 0 }],
-  };
+  state = createInvoiceDraft();
   fillForm();
   saveDraft();
   document.querySelector("#billTo").focus();
@@ -276,7 +268,7 @@ function newInvoice() {
 function clearSavedDraft() {
   if (!window.confirm("Clear the saved invoice draft from this browser?")) return;
   localStorage.removeItem(STORAGE_KEY);
-  state = structuredClone(sampleInvoice);
+  state = createInvoiceDraft();
   fillForm();
   saveStatus.textContent = "Saved draft cleared";
   showToast("Saved draft cleared from this browser.");
