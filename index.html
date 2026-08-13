@@ -9,7 +9,7 @@
     <link rel="manifest" href="./manifest.webmanifest" />
     <link rel="icon" href="./icon-192.png" />
     <link rel="apple-touch-icon" href="./icon-192.png" />
-    <link rel="stylesheet" href="./styles.css?v=14" />
+    <link rel="stylesheet" href="./styles.css?v=18" />
     <title>Invoice Studio</title>
   </head>
   <body>
@@ -49,11 +49,6 @@
               <label for="invoiceNumber">Invoice number</label>
               <input id="invoiceNumber" name="invoiceNumber" data-field="invoiceNumber" type="text" autocomplete="off" required />
             </div>
-            <div class="field-stack">
-              <label for="pdfFileName">PDF file name</label>
-              <input id="pdfFileName" name="pdfFileName" data-field="pdfFileName" type="text" autocomplete="off" aria-describedby="pdfFileNameHelp" />
-              <p id="pdfFileNameHelp" class="field-help">Used when saving or printing. The .pdf extension is added automatically.</p>
-            </div>
             <div class="field-grid field-grid-two">
               <div class="field-stack">
                 <label for="invoiceDate">Invoice date</label>
@@ -63,6 +58,11 @@
                 <label for="dueDate">Due date</label>
                 <input id="dueDate" name="dueDate" data-field="dueDate" type="date" required />
               </div>
+            </div>
+            <div class="field-stack">
+              <label for="pdfFileName">PDF file name <span class="optional-label">(optional)</span></label>
+              <input id="pdfFileName" name="pdfFileName" data-field="pdfFileName" type="text" autocomplete="off" aria-describedby="pdfFileNameHelp" />
+              <p id="pdfFileNameHelp" class="field-help">Suggested filename when you choose Save as PDF. The .pdf extension is added automatically.</p>
             </div>
           </fieldset>
 
@@ -76,10 +76,8 @@
           </fieldset>
 
           <fieldset class="form-section items-section">
-            <div class="legend-row">
-              <legend>Products / services</legend>
-              <span class="currency-label">SGD</span>
-            </div>
+            <legend>Products / services</legend>
+            <span class="currency-label" aria-hidden="true">SGD</span>
             <div class="item-column-labels" aria-hidden="true">
               <span>Qty</span>
               <span>Item</span>
@@ -87,9 +85,10 @@
               <span></span>
             </div>
             <div id="itemsEditor" class="items-editor"></div>
-            <p id="itemFormattingHelp" class="field-help item-formatting-help">Select item text and press Ctrl+B (Cmd+B on Mac) to bold it.</p>
-            <button id="addItemButton" class="button button-secondary add-item-button" type="button">Add item</button>
-            <div class="editor-total" aria-live="polite">
+            <p id="itemFormattingHelp" class="field-help item-formatting-help">Press Enter for a new line. Select item text and press Ctrl+B (Cmd+B on Mac) to bold it.</p>
+            <p id="itemLimitHelp" class="field-help item-limit-help">Up to 5 items fit the one-page invoice.</p>
+            <button id="addItemButton" class="button button-secondary add-item-button" type="button" aria-describedby="itemLimitHelp">Add item</button>
+            <div class="editor-total" aria-live="polite" aria-atomic="true">
               <span>Total</span>
               <strong id="editorTotal">$0.00</strong>
             </div>
@@ -98,12 +97,13 @@
 
         <div class="mobile-output-action">
           <button id="mobileNewInvoiceButton" class="button button-secondary" type="button">New invoice</button>
+          <button id="mobileViewPreviewButton" class="button button-secondary" type="button">View preview</button>
           <button id="mobilePrintButton" class="button button-primary" type="button">Print / Save PDF</button>
         </div>
         <button id="clearDraftButton" class="clear-draft-button" type="button">Clear saved draft</button>
       </section>
 
-      <section class="preview-panel" aria-labelledby="previewTitle">
+      <section id="preview-panel" class="preview-panel" aria-labelledby="previewTitle" tabindex="-1">
         <div class="preview-toolbar">
           <div>
             <h2 id="previewTitle">Invoice preview</h2>
@@ -195,6 +195,6 @@
 
     <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
     <noscript>This app needs JavaScript to create invoices.</noscript>
-    <script src="./app.js?v=15" defer></script>
+    <script src="./app.js?v=18" defer></script>
   </body>
 </html>

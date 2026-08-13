@@ -29,7 +29,9 @@ function loadDraft() {
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     if (!parsed || !Array.isArray(parsed.items) || parsed.items.length === 0) return null;
-    parsed.pdfFileName = parsed.pdfFileName || parsed.invoiceNumber || "invoice";
+    const savedPdfFileName = String(parsed.pdfFileName || "").trim();
+    parsed.pdfFileName = savedPdfFileName || parsed.invoiceNumber || "invoice";
+    parsed.pdfFileNameCustomized = Boolean(savedPdfFileName && savedPdfFileName !== parsed.invoiceNumber);
     parsed.items = parsed.items.slice(0, 5).map((item) => ({
       ...item,
       quantity: normalizeQuantity(item.quantity),
@@ -55,6 +57,7 @@ function createInvoiceDraft() {
   return {
     invoiceNumber,
     pdfFileName: invoiceNumber,
+    pdfFileNameCustomized: false,
     invoiceDate: isoDate(today),
     dueDate: isoDate(due),
     billTo: "",
@@ -147,11 +150,15 @@ function fillForm() {
   renderPreview();
 }
 
-function createField(className, label, input) {
+function createField(className, label, input, id) {
   const wrapper = document.createElement("div");
   wrapper.className = className;
-  wrapper.dataset.label = label;
-  wrapper.append(input);
+  const visibleLabel = document.createElement("label");
+  input.id = id;
+  visibleLabel.className = "mobile-field-label";
+  visibleLabel.htmlFor = input.id;
+  visibleLabel.textContent = label;
+  wrapper.append(visibleLabel, input);
   return wrapper;
 }
 
@@ -286,9 +293,9 @@ function renderItemsEditor() {
     remove.title = remove.disabled ? "At least one item is required" : `Remove item ${index + 1}`;
 
     row.append(
-      createField("mobile-field", "Quantity", quantity),
-      createField("mobile-field", "Item", description),
-      createField("mobile-field", "Price", price),
+      createField("mobile-field", "Quantity", quantity, `quantity-${item.id}`),
+      createField("mobile-field", "Item", description, `description-${item.id}`),
+      createField("mobile-field", "Price", price, `price-${item.id}`),
       remove,
     );
     itemsEditor.append(row);
@@ -332,6 +339,13 @@ function handleFieldInput(event) {
   const field = event.target.dataset.field;
   if (!field) return;
   state[field] = event.target.value;
+  if (field === "pdfFileName") {
+    state.pdfFileNameCustomized = Boolean(event.target.value.trim() && event.target.value !== state.invoiceNumber);
+  }
+  if (field === "invoiceNumber" && !state.pdfFileNameCustomized) {
+    state.pdfFileName = event.target.value;
+    document.querySelector("#pdfFileName").value = event.target.value;
+  }
   renderPreview();
   saveDraft();
 }
@@ -432,7 +446,14 @@ function fieldErrorMessage(input) {
     description: "Enter an item description.",
     price: "Enter a price of 0 or more.",
   };
+  if (input.dataset.field === "dueDate" && hasInvalidDateOrder()) {
+    return "Due date cannot be earlier than the invoice date.";
+  }
   return messages[input.dataset.field || input.dataset.itemField] || "Complete this field.";
+}
+
+function hasInvalidDateOrder() {
+  return Boolean(state.invoiceDate && state.dueDate && state.dueDate < state.invoiceDate);
 }
 
 function showFieldError(input) {
@@ -447,6 +468,7 @@ function showFieldError(input) {
     input.parentElement.append(error);
   }
   error.textContent = fieldErrorMessage(input);
+  error.dataset.validation = input.dataset.field === "dueDate" && hasInvalidDateOrder() ? "date-order" : "field";
   input.setAttribute("aria-invalid", "true");
   const describedBy = new Set((input.getAttribute("aria-describedby") || "").split(/\s+/).filter(Boolean));
   describedBy.add(errorId);
@@ -466,8 +488,16 @@ function clearFieldError(input) {
 function validateForm() {
   form.querySelectorAll('[aria-invalid="true"]').forEach(clearFieldError);
   const invalidInputs = [...form.querySelectorAll("[required]")].filter((input) => !input.validity.valid);
+  const dueDate = document.querySelector("#dueDate");
+  if (hasInvalidDateOrder() && !invalidInputs.includes(dueDate)) invalidInputs.push(dueDate);
   invalidInputs.forEach(showFieldError);
   return invalidInputs;
+}
+
+function viewPreview() {
+  const previewPanel = document.querySelector("#preview-panel");
+  previewPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+  previewPanel.focus({ preventScroll: true });
 }
 
 function printInvoice() {
@@ -518,6 +548,19 @@ function updateConnectionStatus() {
 form.addEventListener("input", handleFieldInput);
 form.addEventListener("input", (event) => {
   if (event.target.matches("[required]") && event.target.validity.valid) clearFieldError(event.target);
+  if (event.target.id === "invoiceDate" || event.target.id === "dueDate") {
+    const dueDate = document.querySelector("#dueDate");
+    const dueDateError = document.querySelector("#error-dueDate");
+    if (!state.invoiceDate || !state.dueDate) {
+      if (dueDateError?.dataset.validation === "date-order") clearFieldError(dueDate);
+      return;
+    }
+    if (hasInvalidDateOrder()) {
+      if (dueDate.getAttribute("aria-invalid") === "true") showFieldError(dueDate);
+      return;
+    }
+    if (dueDateError?.dataset.validation === "date-order") clearFieldError(dueDate);
+  }
 });
 itemsEditor.addEventListener("input", handleItemInput);
 itemsEditor.addEventListener("click", (event) => {
@@ -530,6 +573,7 @@ document.querySelector("#mobileNewInvoiceButton").addEventListener("click", newI
 document.querySelector("#clearDraftButton").addEventListener("click", clearSavedDraft);
 document.querySelector("#printButton").addEventListener("click", printInvoice);
 document.querySelector("#mobilePrintButton").addEventListener("click", printInvoice);
+document.querySelector("#mobileViewPreviewButton").addEventListener("click", viewPreview);
 
 window.addEventListener("online", updateConnectionStatus);
 window.addEventListener("offline", updateConnectionStatus);

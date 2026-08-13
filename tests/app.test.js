@@ -158,25 +158,142 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
   assert.match(initial.dueDate, /^\d{4}-\d{2}-\d{2}$/);
   assert.deepEqual({ billTo: initial.billTo, description: initial.description, price: initial.price }, { billTo: "", description: "", price: "" });
 
-  for (const width of [320, 375, 390, 768, 1440]) {
+  const semantics = JSON.parse(await evaluate(page, `JSON.stringify({
+    legends: [...document.querySelectorAll('fieldset')].map(fieldset => ({
+      direct: [...fieldset.children].filter(child => child.tagName === 'LEGEND').length,
+      first: fieldset.firstElementChild?.tagName,
+      text: fieldset.querySelector(':scope > legend')?.textContent.trim(),
+      plain: [...fieldset.querySelector(':scope > legend')?.childNodes || []].every(node => node.nodeType === Node.TEXT_NODE)
+    })),
+    productsName: document.querySelector('.items-section > legend')?.textContent,
+    currencySibling: document.querySelector('.items-section > legend + .currency-label')?.textContent,
+    currencyHidden: document.querySelector('.currency-label')?.getAttribute('aria-hidden'),
+    addHelp: document.querySelector('#addItemButton').getAttribute('aria-describedby'),
+    addHelpText: document.querySelector('#itemLimitHelp').textContent,
+    totalAtomic: document.querySelector('.editor-total').getAttribute('aria-atomic'),
+    placeholders: document.querySelectorAll('[placeholder]').length
+  })`));
+  assert.ok(semantics.legends.every((legend) => legend.direct === 1 && legend.first === "LEGEND" && legend.plain));
+  assert.equal(semantics.productsName, "Products / services");
+  assert.equal(semantics.currencySibling, "SGD");
+  assert.equal(semantics.currencyHidden, "true");
+  assert.equal(semantics.addHelp, "itemLimitHelp");
+  assert.match(semantics.addHelpText, /up to 5 items/i);
+  assert.equal(semantics.totalAtomic, "true");
+  assert.equal(semantics.placeholders, 0);
+
+  const filenameBehavior = JSON.parse(await evaluate(page, `(() => {
+    const number = document.querySelector('#invoiceNumber');
+    const filename = document.querySelector('#pdfFileName');
+    number.value = 'INV-SYNC-1'; number.dispatchEvent(new Event('input', { bubbles: true }));
+    const synced = filename.value;
+    filename.value = 'Client custom'; filename.dispatchEvent(new Event('input', { bubbles: true }));
+    number.value = 'INV-SYNC-2'; number.dispatchEvent(new Event('input', { bubbles: true }));
+    return JSON.stringify({ synced, customized: filename.value });
+  })()`));
+  assert.deepEqual(filenameBehavior, { synced: "INV-SYNC-1", customized: "Client custom" });
+
+  for (const width of [320, 375, 390, 700, 701, 1024, 1080, 1081, 1200, 1201, 1280, 1440]) {
     await page.send("Emulation.setDeviceMetricsOverride", { width, height: 900, deviceScaleFactor: 1, mobile: width < 500 });
     await new Promise((resolve) => setTimeout(resolve, 60));
     const layout = await evaluate(page, `JSON.stringify({
       viewport: innerWidth,
       documentWidth: document.documentElement.scrollWidth,
       button: (() => { const r = document.querySelector('.remove-item').getBoundingClientRect(); return { left: r.left, right: r.right, width: r.width }; })(),
-      label: document.querySelector('.remove-item').getAttribute('aria-label')
+      label: document.querySelector('.remove-item').getAttribute('aria-label'),
+      workspaceColumns: getComputedStyle(document.querySelector('.workspace')).gridTemplateColumns.split(' ').length,
+      editorWidth: document.querySelector('.editor-panel').getBoundingClientRect().width,
+      headingDirection: getComputedStyle(document.querySelector('.panel-heading')).flexDirection,
+      headingGap: parseFloat(getComputedStyle(document.querySelector('.panel-heading')).rowGap),
+      mobileLabels: [...document.querySelectorAll('.mobile-field-label')].map(label => ({
+        text: label.textContent,
+        visible: getComputedStyle(label).display !== 'none',
+        target: document.getElementById(label.htmlFor)?.dataset.itemField
+      })),
+      mobileItemGeometry: (() => {
+        const fields = [...document.querySelectorAll('.item-row .mobile-field')].map(field => field.getBoundingClientRect());
+        const remove = document.querySelector('.remove-item').getBoundingClientRect();
+        return { quantityTop: fields[0].top, descriptionTop: fields[1].top, priceTop: fields[2].top, removeTop: remove.top };
+      })(),
+      columnLabelGeometry: (() => {
+        const labels = document.querySelector('.item-column-labels');
+        const rect = labels.getBoundingClientRect();
+        const section = document.querySelector('.items-section').getBoundingClientRect();
+        const labelLefts = [...labels.children].map(label => label.getBoundingClientRect().left);
+        const fieldLefts = [...document.querySelectorAll('.item-row > *')].map(field => field.getBoundingClientRect().left);
+        return { width: rect.width, left: rect.left, right: rect.right, sectionLeft: section.left, sectionRight: section.right, labelLefts, fieldLefts };
+      })(),
+      itemInside: (() => {
+        const section = document.querySelector('.items-section').getBoundingClientRect();
+        return [...document.querySelectorAll('.item-row')].every(row => {
+          const rect = row.getBoundingClientRect();
+          return rect.left >= section.left - 1 && rect.right <= section.right + 1;
+        });
+      })()
     })`);
     const measured = JSON.parse(layout);
     assert.ok(measured.documentWidth <= measured.viewport, `${width}px layout must not overflow`);
     assert.ok(measured.button.left >= 0 && measured.button.right <= measured.viewport && measured.button.width <= 44.1);
     assert.equal(measured.label, "Remove item 1");
+    assert.equal(measured.workspaceColumns, width <= 1200 ? 1 : 2, `${width}px workspace column count`);
+    if (width <= 1200) {
+      assert.ok(measured.editorWidth <= 720.1, `${width}px editor should remain constrained`);
+      assert.equal(measured.headingDirection, "column", `${width}px save status should group with heading`);
+      assert.ok(measured.headingGap <= 8.1, `${width}px heading/save gap should remain close`);
+    } else {
+      assert.ok(measured.editorWidth >= 460, `${width}px split editor should remain usable`);
+    }
+    assert.equal(measured.itemInside, true, `${width}px item row must remain inside its section`);
+    assert.deepEqual(measured.mobileLabels.map((label) => label.text), ["Quantity", "Item", "Price"]);
+    assert.ok(measured.mobileLabels.every((label) => label.target));
+    assert.ok(measured.mobileLabels.every((label) => label.visible === (width <= 700)));
+    if (width <= 700) {
+      assert.ok(Math.abs(measured.mobileItemGeometry.quantityTop - measured.mobileItemGeometry.priceTop) < 1);
+      assert.ok(measured.mobileItemGeometry.descriptionTop > measured.mobileItemGeometry.quantityTop);
+      assert.ok(measured.mobileItemGeometry.removeTop > measured.mobileItemGeometry.descriptionTop);
+    } else {
+      assert.ok(measured.columnLabelGeometry.width > 0, `${width}px item column labels need usable width`);
+      assert.ok(measured.columnLabelGeometry.left >= measured.columnLabelGeometry.sectionLeft - 1);
+      assert.ok(measured.columnLabelGeometry.right <= measured.columnLabelGeometry.sectionRight + 1);
+      measured.columnLabelGeometry.labelLefts.forEach((left, index) => {
+        assert.ok(Math.abs(left - measured.columnLabelGeometry.fieldLefts[index]) < 1, `${width}px item label ${index + 1} alignment`);
+      });
+    }
   }
+
+  await page.send("Emulation.setDeviceMetricsOverride", { width: 320, height: 640, deviceScaleFactor: 1, mobile: true });
+  const previewClickStart = JSON.parse(await evaluate(page, `(() => {
+    const button = document.querySelector('#mobileViewPreviewButton');
+    button.scrollIntoView({ block: 'center' });
+    window.__prints = 0;
+    window.print = () => { window.__prints += 1; };
+    const rect = button.getBoundingClientRect();
+    return JSON.stringify({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2, scrollY });
+  })()`));
+  await page.send("Input.dispatchMouseEvent", { type: "mousePressed", x: previewClickStart.x, y: previewClickStart.y, button: "left", clickCount: 1 });
+  await page.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: previewClickStart.x, y: previewClickStart.y, button: "left", clickCount: 1 });
+  await waitFor(() => evaluate(page, `document.activeElement.id === 'preview-panel' && Math.abs(scrollY - ${previewClickStart.scrollY}) > 1 && document.querySelector('#preview-panel').getBoundingClientRect().top < innerHeight`));
+  const previewNavigation = JSON.parse(await evaluate(page, `JSON.stringify({
+    scrollY,
+    prints: window.__prints,
+    focused: document.activeElement.id,
+    targetTop: document.querySelector('#preview-panel').getBoundingClientRect().top,
+    targetVisible: (() => { const rect = document.querySelector('#preview-panel').getBoundingClientRect(); return rect.top < innerHeight && rect.bottom > 72; })(),
+    outlineWidth: getComputedStyle(document.querySelector('#preview-panel')).outlineWidth,
+    scrollMarginTop: getComputedStyle(document.querySelector('#preview-panel')).scrollMarginTop
+  })`));
+  assert.equal(previewNavigation.prints, 0);
+  assert.equal(previewNavigation.focused, "preview-panel");
+  assert.equal(previewNavigation.targetVisible, true);
+  assert.ok(Math.abs(previewNavigation.scrollY - previewClickStart.scrollY) > 1);
+  assert.equal(previewNavigation.outlineWidth, "3px");
+  assert.equal(previewNavigation.scrollMarginTop, "72px");
+  await page.send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
 
   await evaluate(page, `(() => {
     for (let index = 0; index < 4; index += 1) document.querySelector('#addItemButton').click();
   })()`);
-  assert.deepEqual(JSON.parse(await evaluate(page, `JSON.stringify({ rows: document.querySelectorAll('.item-row').length, disabled: document.querySelector('#addItemButton').disabled })`)), { rows: 5, disabled: true });
+  assert.deepEqual(JSON.parse(await evaluate(page, `JSON.stringify({ rows: document.querySelectorAll('.item-row').length, disabled: document.querySelector('#addItemButton').disabled, describedBy: document.querySelector('#addItemButton').getAttribute('aria-describedby') })`)), { rows: 5, disabled: true, describedBy: "itemLimitHelp" });
 
   await evaluate(page, `(() => {
     document.querySelectorAll('.remove-item')[1].click();
@@ -251,6 +368,29 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
   await evaluate(page, "location.reload(); true");
   await waitFor(() => evaluate(page, "document.readyState === 'complete' && document.querySelectorAll('.item-row').length === 4"));
   assert.equal(await evaluate(page, "document.querySelector('#editorTotal').textContent"), "$31.50");
+  const persistedCustomFilename = JSON.parse(await evaluate(page, `(() => {
+    const filename = document.querySelector('#pdfFileName');
+    const before = filename.value;
+    const number = document.querySelector('#invoiceNumber');
+    number.value = 'INV-AFTER-RELOAD'; number.dispatchEvent(new Event('input', { bubbles: true }));
+    return JSON.stringify({ before, after: filename.value });
+  })()`));
+  assert.deepEqual(persistedCustomFilename, { before: "Client custom", after: "Client custom" });
+  await evaluate(page, `(() => {
+    const filename = document.querySelector('#pdfFileName');
+    filename.value = ''; filename.dispatchEvent(new Event('input', { bubbles: true }));
+    window.dispatchEvent(new PageTransitionEvent('pagehide'));
+    location.reload();
+  })()`);
+  await waitFor(() => evaluate(page, "document.readyState === 'complete' && document.querySelector('#pdfFileName').value === document.querySelector('#invoiceNumber').value"));
+  const clearedFilenameBehavior = JSON.parse(await evaluate(page, `(() => {
+    const number = document.querySelector('#invoiceNumber');
+    const filename = document.querySelector('#pdfFileName');
+    const reset = filename.value;
+    number.value = 'INV-CLEAR-SYNC'; number.dispatchEvent(new Event('input', { bubbles: true }));
+    return JSON.stringify({ reset, numberBefore: 'INV-AFTER-RELOAD', synced: filename.value });
+  })()`));
+  assert.deepEqual(clearedFilenameBehavior, { reset: "INV-AFTER-RELOAD", numberBefore: "INV-AFTER-RELOAD", synced: "INV-CLEAR-SYNC" });
 
   await evaluate(page, `(() => {
     window.confirm = () => true;
@@ -270,10 +410,11 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
     const cancelled = { number: document.querySelector('#invoiceNumber').value, billTo: billTo.value };
     window.confirm = () => true;
     document.querySelector('#newInvoiceButton').click();
-    return JSON.stringify({ before, cancelled, after: document.querySelector('#invoiceNumber').value, billToAfter: document.querySelector('#billTo').value });
+    return JSON.stringify({ before, cancelled, after: document.querySelector('#invoiceNumber').value, pdfAfter: document.querySelector('#pdfFileName').value, billToAfter: document.querySelector('#billTo').value });
   })()`));
   assert.deepEqual(newInvoiceProtection.cancelled, { number: newInvoiceProtection.before, billTo: "Keep me" });
   assert.notEqual(newInvoiceProtection.after, newInvoiceProtection.before);
+  assert.equal(newInvoiceProtection.pdfAfter, newInvoiceProtection.after);
   assert.equal(newInvoiceProtection.billToAfter, "");
   const followingInvoiceNumber = await evaluate(page, `(() => {
     document.querySelector('#newInvoiceButton').click();
@@ -290,6 +431,29 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
     return JSON.stringify({ count: invalid.length, linked: invalid.every(input => input.getAttribute('aria-describedby').split(/\\s+/).some(id => document.getElementById(id)?.classList.contains('field-error'))) });
   })()`));
   assert.deepEqual(validation, { count: 6, linked: true });
+  const requiredDateRecovery = JSON.parse(await evaluate(page, `(() => {
+    const invoiceDate = document.querySelector('#invoiceDate');
+    const dueDate = document.querySelector('#dueDate');
+    invoiceDate.value = '2026-08-20'; invoiceDate.dispatchEvent(new Event('input', { bubbles: true }));
+    const afterInvoiceDate = {
+      invoiceInvalid: invoiceDate.hasAttribute('aria-invalid'),
+      invoiceError: Boolean(document.querySelector('#error-invoiceDate')),
+      dueInvalid: dueDate.hasAttribute('aria-invalid'),
+      dueError: Boolean(document.querySelector('#error-dueDate'))
+    };
+    dueDate.value = '2026-08-27'; dueDate.dispatchEvent(new Event('input', { bubbles: true }));
+    const afterDueDate = {
+      invoiceInvalid: invoiceDate.hasAttribute('aria-invalid'),
+      invoiceError: Boolean(document.querySelector('#error-invoiceDate')),
+      dueInvalid: dueDate.hasAttribute('aria-invalid'),
+      dueError: Boolean(document.querySelector('#error-dueDate'))
+    };
+    return JSON.stringify({ afterInvoiceDate, afterDueDate });
+  })()`));
+  assert.deepEqual(requiredDateRecovery, {
+    afterInvoiceDate: { invoiceInvalid: false, invoiceError: false, dueInvalid: true, dueError: true },
+    afterDueDate: { invoiceInvalid: false, invoiceError: false, dueInvalid: false, dueError: false },
+  });
   const repeatedValidation = JSON.parse(await evaluate(page, `(() => {
     const invoiceNumber = document.querySelector('#invoiceNumber');
     invoiceNumber.value = 'INV-1'; invoiceNumber.dispatchEvent(new Event('input', { bubbles: true }));
@@ -313,21 +477,41 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
 
   const printCount = await evaluate(page, `(() => {
     window.__prints = 0; window.__printedTitle = ''; window.print = () => { window.__prints += 1; window.__printedTitle = document.title; };
-    const values = { invoiceNumber: 'INV-1', pdfFileName: 'August / Brew Invoice.pdf', invoiceDate: '2026-08-13', dueDate: '2026-08-20', billTo: 'Customer' };
+    const values = { invoiceNumber: 'INV-1', pdfFileName: 'August / Brew Invoice.pdf', invoiceDate: '2026-08-20', dueDate: '2026-08-13', billTo: 'Customer' };
     for (const [id, value] of Object.entries(values)) { const input = document.querySelector('#' + id); input.value = value; input.dispatchEvent(new Event('input', { bubbles: true })); }
     const description = document.querySelector('[data-item-field="description"]'); description.value = 'Service'; description.dispatchEvent(new Event('input', { bubbles: true }));
     const price = document.querySelector('[data-item-field="price"]'); price.value = '25'; price.dispatchEvent(new Event('input', { bubbles: true }));
     document.querySelector('#printButton').click();
-    return JSON.stringify({ prints: window.__prints, printedTitle: window.__printedTitle, invalid: document.querySelectorAll('[aria-invalid="true"]').length });
+    const invoiceDate = document.querySelector('#invoiceDate');
+    const dueDate = document.querySelector('#dueDate');
+    const rejected = { prints: window.__prints, focused: document.activeElement.id, message: document.querySelector('#error-dueDate')?.textContent, describedBy: dueDate.getAttribute('aria-describedby') };
+    invoiceDate.value = ''; invoiceDate.dispatchEvent(new Event('input', { bubbles: true }));
+    const clearedInvoiceDate = { invalid: dueDate.hasAttribute('aria-invalid'), errorExists: Boolean(document.querySelector('#error-dueDate')), describedBy: dueDate.getAttribute('aria-describedby') };
+    invoiceDate.value = '2026-08-20'; invoiceDate.dispatchEvent(new Event('input', { bubbles: true }));
+    document.querySelector('#printButton').click();
+    dueDate.value = ''; dueDate.dispatchEvent(new Event('input', { bubbles: true }));
+    const clearedDueDate = { invalid: dueDate.hasAttribute('aria-invalid'), errorExists: Boolean(document.querySelector('#error-dueDate')), describedBy: dueDate.getAttribute('aria-describedby') };
+    dueDate.value = '2026-08-27'; dueDate.dispatchEvent(new Event('input', { bubbles: true }));
+    const recovered = { invalid: dueDate.hasAttribute('aria-invalid'), errorExists: Boolean(document.querySelector('#error-dueDate')) };
+    document.querySelector('#printButton').click();
+    return JSON.stringify({ rejected, clearedInvoiceDate, clearedDueDate, recovered, prints: window.__prints, printedTitle: window.__printedTitle, invalid: document.querySelectorAll('[aria-invalid="true"]').length });
   })()`);
-  assert.deepEqual(JSON.parse(printCount), { prints: 1, printedTitle: "August - Brew Invoice.pdf", invalid: 0 });
+  assert.deepEqual(JSON.parse(printCount), {
+    rejected: { prints: 0, focused: "dueDate", message: "Due date cannot be earlier than the invoice date.", describedBy: "error-dueDate" },
+    clearedInvoiceDate: { invalid: false, errorExists: false, describedBy: null },
+    clearedDueDate: { invalid: false, errorExists: false, describedBy: null },
+    recovered: { invalid: false, errorExists: false },
+    prints: 1,
+    printedTitle: "August - Brew Invoice.pdf",
+    invalid: 0,
+  });
 
-  const cacheReady = await waitFor(() => evaluate(page, "caches.keys().then(keys => keys.includes('invoice-studio-v15'))"));
+  const cacheReady = await waitFor(() => evaluate(page, "caches.keys().then(keys => keys.includes('invoice-studio-v18'))"));
   assert.equal(cacheReady, true);
   const workerSource = await readFile(join(ROOT, "sw.js"), "utf8");
   const handlers = {};
   const deletedCaches = [];
-  const cacheKeys = ["invoice-studio-v1", "invoice-studio-v15", "unrelated-app-cache"];
+  const cacheKeys = ["invoice-studio-v1", "invoice-studio-v18", "unrelated-app-cache"];
   const workerContext = {
     URL,
     Response,
