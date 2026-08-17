@@ -15,6 +15,13 @@ const saveStatus = document.querySelector("#saveStatus");
 const toast = document.querySelector("#toast");
 const installButton = document.querySelector("#installButton");
 const offlineBanner = document.querySelector("#offlineBanner");
+const outputDialog = document.querySelector("#outputDialog");
+const outputFileName = document.querySelector("#outputFileName");
+const savePdfButton = document.querySelector("#savePdfButton");
+const savePdfButtonLabel = document.querySelector("#savePdfButtonLabel");
+const printNowButton = document.querySelector("#printNowButton");
+const closeOutputDialogButton = document.querySelector("#closeOutputDialogButton");
+const cancelOutputDialogButton = document.querySelector("#cancelOutputDialogButton");
 
 let state = loadDraft() ?? createInvoiceDraft();
 let saveTimer;
@@ -22,6 +29,8 @@ let toastTimer;
 let installPrompt;
 let draftPersistenceEnabled = true;
 let draftChanged = false;
+let outputBusy = false;
+let outputDialogTrigger;
 
 function loadDraft() {
   try {
@@ -500,21 +509,111 @@ function viewPreview() {
   previewPanel.focus({ preventScroll: true });
 }
 
-function printInvoice() {
+function invoiceIsReady(action) {
   const invalidInputs = validateForm();
   if (invalidInputs.length) {
-    showToast("Complete the highlighted fields before printing.");
+    showToast(`Complete the highlighted fields before ${action}.`);
     invalidInputs[0].focus();
-    return;
+    return false;
   }
   if (!Number.isFinite(invoiceTotal())) {
-    showToast("The invoice total is too large. Reduce a quantity or price before printing.");
-    return;
+    showToast(`The invoice total is too large. Reduce a quantity or price before ${action}.`);
+    return false;
   }
   if (invoiceSheet.scrollHeight > PAPER_HEIGHT + 2 || invoiceSheet.scrollWidth > PAPER_WIDTH + 2) {
     showToast("This invoice is too long for the one-page template. Shorten an item or remove a row.");
+    return false;
+  }
+  return true;
+}
+
+function openOutputDialog(event) {
+  if (!invoiceIsReady("saving or printing")) return;
+  outputDialogTrigger = event.currentTarget;
+  outputFileName.textContent = `${safePdfFileName(state.pdfFileName, state.invoiceNumber)}.pdf`;
+  outputDialog.showModal();
+}
+
+function closeOutputDialog() {
+  if (outputBusy) return;
+  dismissOutputDialog();
+}
+
+function dismissOutputDialog() {
+  outputDialog.close();
+  if (outputDialogTrigger?.isConnected) outputDialogTrigger.focus();
+  outputDialogTrigger = undefined;
+}
+
+function setOutputBusy(isBusy) {
+  outputBusy = isBusy;
+  savePdfButton.disabled = isBusy;
+  printNowButton.disabled = isBusy;
+  closeOutputDialogButton.disabled = isBusy;
+  cancelOutputDialogButton.disabled = isBusy;
+  savePdfButtonLabel.textContent = isBusy ? "Creating PDF..." : "Save as PDF";
+  outputDialog.setAttribute("aria-busy", String(isBusy));
+}
+
+async function downloadInvoicePdf() {
+  if (!invoiceIsReady("saving")) {
+    dismissOutputDialog();
     return;
   }
+  if (typeof window.html2pdf !== "function") {
+    showToast("PDF saving is unavailable. Reload the app and try again.");
+    return;
+  }
+
+  const pdfBaseName = safePdfFileName(state.pdfFileName, state.invoiceNumber);
+  const pdfFileName = `${pdfBaseName}.pdf`;
+  const exportSheet = invoiceSheet.cloneNode(true);
+  exportSheet.removeAttribute("id");
+  exportSheet.style.width = `${Math.floor(PAPER_WIDTH)}px`;
+  exportSheet.style.minHeight = `${Math.floor(PAPER_HEIGHT) - 1}px`;
+  exportSheet.style.margin = "0";
+  exportSheet.style.boxShadow = "none";
+  exportSheet.style.transform = "none";
+
+  setOutputBusy(true);
+  try {
+    const worker = window
+      .html2pdf()
+      .set({
+        margin: 0,
+        filename: pdfFileName,
+        image: { type: "jpeg", quality: 0.98 },
+        html2canvas: { backgroundColor: "#ffffff", scale: 2, useCORS: true },
+        jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
+      })
+      .from(exportSheet)
+      .toPdf();
+    await worker
+      .get("pdf")
+      .then((pdf) => {
+        pdf.setProperties({
+          title: pdfBaseName,
+          subject: `Invoice ${state.invoiceNumber}`,
+          author: "Eng Hoon Residences",
+          creator: "Eng Hoon Residences Invoice Studio",
+        });
+      })
+      .save();
+    dismissOutputDialog();
+    showToast(`${pdfFileName} saved.`);
+  } catch {
+    showToast("The PDF could not be created. Try again or use Print.");
+  } finally {
+    setOutputBusy(false);
+  }
+}
+
+function printInvoice() {
+  if (!invoiceIsReady("printing")) {
+    dismissOutputDialog();
+    return;
+  }
+  dismissOutputDialog();
   document.title = `${safePdfFileName(state.pdfFileName, state.invoiceNumber)}.pdf`;
   window.print();
   window.setTimeout(() => {
@@ -571,9 +670,23 @@ document.querySelector("#addItemButton").addEventListener("click", addItem);
 document.querySelector("#newInvoiceButton").addEventListener("click", newInvoice);
 document.querySelector("#mobileNewInvoiceButton").addEventListener("click", newInvoice);
 document.querySelector("#clearDraftButton").addEventListener("click", clearSavedDraft);
-document.querySelector("#printButton").addEventListener("click", printInvoice);
-document.querySelector("#mobilePrintButton").addEventListener("click", printInvoice);
+document.querySelector("#printButton").addEventListener("click", openOutputDialog);
+document.querySelector("#mobilePrintButton").addEventListener("click", openOutputDialog);
 document.querySelector("#mobileViewPreviewButton").addEventListener("click", viewPreview);
+savePdfButton.addEventListener("click", downloadInvoicePdf);
+printNowButton.addEventListener("click", printInvoice);
+closeOutputDialogButton.addEventListener("click", closeOutputDialog);
+cancelOutputDialogButton.addEventListener("click", closeOutputDialog);
+outputDialog.addEventListener("cancel", (event) => {
+  if (outputBusy) event.preventDefault();
+});
+outputDialog.addEventListener("click", (event) => {
+  if (event.target === outputDialog) closeOutputDialog();
+});
+outputDialog.addEventListener("close", () => {
+  if (outputDialogTrigger?.isConnected) outputDialogTrigger.focus();
+  outputDialogTrigger = undefined;
+});
 
 window.addEventListener("online", updateConnectionStatus);
 window.addEventListener("offline", updateConnectionStatus);

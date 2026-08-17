@@ -6,5 +6,8 @@
   "scripts": {
     "check": "node --check app.js && node --check sw.js && node --check tests/app.test.js",
     "test": "npm run check && node --test tests/app.test.js"
+  },
+  "dependencies": {
+    "html2pdf.js": "^0.14.0"
   }
 }

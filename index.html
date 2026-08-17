@@ -9,7 +9,7 @@
     <link rel="manifest" href="./manifest.webmanifest" />
     <link rel="icon" href="./icon-192.png" />
     <link rel="apple-touch-icon" href="./icon-192.png" />
-    <link rel="stylesheet" href="./styles.css?v=18" />
+    <link rel="stylesheet" href="./styles.css?v=19" />
     <title>Invoice Studio</title>
   </head>
   <body>
@@ -28,7 +28,7 @@
       <div class="header-actions">
         <button id="installButton" class="button button-secondary" type="button" hidden>Install app</button>
         <button id="newInvoiceButton" class="button button-secondary" type="button">New invoice</button>
-        <button id="printButton" class="button button-primary" type="button">Print / Save PDF</button>
+        <button id="printButton" class="button button-primary" type="button">Save invoice</button>
       </div>
     </header>
 
@@ -62,7 +62,7 @@
             <div class="field-stack">
               <label for="pdfFileName">PDF file name <span class="optional-label">(optional)</span></label>
               <input id="pdfFileName" name="pdfFileName" data-field="pdfFileName" type="text" autocomplete="off" aria-describedby="pdfFileNameHelp" />
-              <p id="pdfFileNameHelp" class="field-help">Suggested filename when you choose Save as PDF. The .pdf extension is added automatically.</p>
+              <p id="pdfFileNameHelp" class="field-help">File name used when you choose Save as PDF. The .pdf extension is added automatically.</p>
             </div>
           </fieldset>
 
@@ -98,7 +98,7 @@
         <div class="mobile-output-action">
           <button id="mobileNewInvoiceButton" class="button button-secondary" type="button">New invoice</button>
           <button id="mobileViewPreviewButton" class="button button-secondary" type="button">View preview</button>
-          <button id="mobilePrintButton" class="button button-primary" type="button">Print / Save PDF</button>
+          <button id="mobilePrintButton" class="button button-primary" type="button">Save invoice</button>
         </div>
         <button id="clearDraftButton" class="clear-draft-button" type="button">Clear saved draft</button>
       </section>
@@ -193,8 +193,33 @@
       </section>
     </main>
 
+    <dialog id="outputDialog" class="output-dialog" aria-labelledby="outputDialogTitle" aria-describedby="outputDialogDescription">
+      <div class="output-dialog-card">
+        <button id="closeOutputDialogButton" class="dialog-close-button" type="button" aria-label="Close save options">&times;</button>
+        <p class="section-kicker">Output options</p>
+        <h2 id="outputDialogTitle">Save invoice</h2>
+        <p id="outputDialogDescription" class="output-dialog-description">Download a named PDF file, or open your device's print window.</p>
+        <div class="output-file-summary">
+          <span>PDF file name</span>
+          <strong id="outputFileName"></strong>
+        </div>
+        <div class="output-option-list">
+          <button id="savePdfButton" class="output-option output-option-primary" type="button">
+            <span id="savePdfButtonLabel" class="output-option-title">Save as PDF</span>
+            <span class="output-option-description">Downloads the invoice as the PDF file shown above.</span>
+          </button>
+          <button id="printNowButton" class="output-option" type="button">
+            <span class="output-option-title">Print</span>
+            <span class="output-option-description">Opens the print window for a printer or other destination.</span>
+          </button>
+        </div>
+        <button id="cancelOutputDialogButton" class="button button-secondary output-cancel-button" type="button">Cancel</button>
+      </div>
+    </dialog>
+
     <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
     <noscript>This app needs JavaScript to create invoices.</noscript>
-    <script src="./app.js?v=18" defer></script>
+    <script src="./vendor/html2pdf.bundle.min.js?v=19" defer></script>
+    <script src="./app.js?v=19" defer></script>
   </body>
 </html>

@@ -697,6 +697,132 @@ h1 {
   font-weight: 600;
 }
 
+.output-dialog {
+  width: min(520px, calc(100vw - 28px));
+  max-width: none;
+  padding: 0;
+  color: var(--ink);
+  border: 0;
+  border-radius: 12px;
+  background: var(--paper);
+  box-shadow: 0 24px 70px rgb(0 0 0 / 0.26);
+}
+
+.output-dialog::backdrop {
+  background: rgb(18 21 25 / 0.56);
+  backdrop-filter: blur(2px);
+}
+
+.output-dialog-card {
+  position: relative;
+  padding: 26px;
+}
+
+.output-dialog h2 {
+  margin: 4px 42px 6px 0;
+  font-size: 26px;
+  letter-spacing: -0.03em;
+}
+
+.output-dialog-description {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.dialog-close-button {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  display: grid;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  place-items: center;
+  color: var(--muted);
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  font-size: 27px;
+  line-height: 1;
+}
+
+.dialog-close-button:hover {
+  color: var(--ink);
+  background: var(--workspace);
+}
+
+.output-file-summary {
+  display: grid;
+  gap: 3px;
+  margin: 20px 0;
+  padding: 12px 14px;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f7f8f9;
+}
+
+.output-file-summary span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.output-option-list {
+  display: grid;
+  gap: 10px;
+}
+
+.output-option {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  min-height: 76px;
+  padding: 14px 16px;
+  color: var(--ink);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--paper);
+  text-align: left;
+}
+
+.output-option:hover {
+  border-color: var(--ink);
+  background: #f7f8f9;
+}
+
+.output-option-primary {
+  color: #fff;
+  border-color: #111316;
+  background: #17191c;
+}
+
+.output-option-primary:hover {
+  background: #30343a;
+}
+
+.output-option-title {
+  font-weight: 750;
+}
+
+.output-option-description {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.output-option-primary .output-option-description {
+  color: #d9dde2;
+}
+
+.output-cancel-button {
+  width: 100%;
+  margin-top: 12px;
+}
+
 noscript {
   display: block;
   padding: 20px;
@@ -843,6 +969,10 @@ noscript {
     min-height: 430px;
     padding: 12px;
   }
+
+  .output-dialog-card {
+    padding: 22px 18px 18px;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -871,6 +1001,7 @@ noscript {
   .offline-banner,
   .editor-panel,
   .preview-toolbar,
+  .output-dialog,
   .toast {
     display: none !important;
   }

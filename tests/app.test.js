@@ -494,24 +494,122 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
     dueDate.value = '2026-08-27'; dueDate.dispatchEvent(new Event('input', { bubbles: true }));
     const recovered = { invalid: dueDate.hasAttribute('aria-invalid'), errorExists: Boolean(document.querySelector('#error-dueDate')) };
     document.querySelector('#printButton').click();
-    return JSON.stringify({ rejected, clearedInvoiceDate, clearedDueDate, recovered, prints: window.__prints, printedTitle: window.__printedTitle, invalid: document.querySelectorAll('[aria-invalid="true"]').length });
+    const dialog = {
+      open: document.querySelector('#outputDialog').open,
+      fileName: document.querySelector('#outputFileName').textContent,
+      printsBeforeChoice: window.__prints
+    };
+    document.querySelector('#printNowButton').click();
+    return JSON.stringify({ rejected, clearedInvoiceDate, clearedDueDate, recovered, dialog, prints: window.__prints, printedTitle: window.__printedTitle, focused: document.activeElement.id, invalid: document.querySelectorAll('[aria-invalid="true"]').length });
   })()`);
   assert.deepEqual(JSON.parse(printCount), {
     rejected: { prints: 0, focused: "dueDate", message: "Due date cannot be earlier than the invoice date.", describedBy: "error-dueDate" },
     clearedInvoiceDate: { invalid: false, errorExists: false, describedBy: null },
     clearedDueDate: { invalid: false, errorExists: false, describedBy: null },
     recovered: { invalid: false, errorExists: false },
+    dialog: { open: true, fileName: "August - Brew Invoice.pdf", printsBeforeChoice: 0 },
     prints: 1,
     printedTitle: "August - Brew Invoice.pdf",
+    focused: "printButton",
     invalid: 0,
   });
 
-  const cacheReady = await waitFor(() => evaluate(page, "caches.keys().then(keys => keys.includes('invoice-studio-v18'))"));
+  assert.equal(await evaluate(page, "typeof window.html2pdf"), "function");
+  await page.send("Emulation.setDeviceMetricsOverride", { width: 320, height: 640, deviceScaleFactor: 1, mobile: true });
+  const mobileDialog = JSON.parse(await evaluate(page, `(() => {
+    document.querySelector('#mobilePrintButton').click();
+    const dialog = document.querySelector('#outputDialog');
+    const rect = dialog.getBoundingClientRect();
+    const optionHeights = [...dialog.querySelectorAll('.output-option')].map(option => option.getBoundingClientRect().height);
+    const result = {
+      open: dialog.open,
+      left: rect.left,
+      right: rect.right,
+      viewport: innerWidth,
+      fileName: document.querySelector('#outputFileName').textContent,
+      optionHeights
+    };
+    document.querySelector('#cancelOutputDialogButton').click();
+    return JSON.stringify(result);
+  })()`));
+  assert.equal(mobileDialog.open, true);
+  assert.ok(mobileDialog.left >= 0);
+  assert.ok(mobileDialog.right <= mobileDialog.viewport);
+  assert.equal(mobileDialog.fileName, "August - Brew Invoice.pdf");
+  mobileDialog.optionHeights.forEach((height) => assert.ok(height >= 76));
+  await page.send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
+
+  await browser.send("Browser.setDownloadBehavior", { behavior: "allow", downloadPath: profile, eventsEnabled: true });
+  const downloadedPdfPath = join(profile, "August - Brew Invoice.pdf");
+  await evaluate(page, `(() => {
+    document.querySelector('#printButton').click();
+    document.querySelector('#savePdfButton').click();
+    return true;
+  })()`);
+  await waitFor(async () => {
+    try {
+      return (await stat(downloadedPdfPath)).size > 20000;
+    } catch {
+      return false;
+    }
+  }, 20000);
+  const generatedPdf = await readFile(downloadedPdfPath);
+  assert.equal(generatedPdf.subarray(0, 4).toString(), "%PDF");
+  assert.equal((generatedPdf.toString("latin1").match(/\/Type \/Page\b/g) || []).length, 1);
+  await waitFor(() => evaluate(page, "document.querySelector('#outputDialog').open === false"));
+
+  const pdfDownload = JSON.parse(await evaluate(page, `(async () => {
+    const captured = {};
+    const worker = {
+      set(options) { captured.options = options; return this; },
+      from(element) { captured.element = { id: element.id, transform: element.style.transform, width: element.style.width }; return this; },
+      toPdf() { captured.toPdf = true; return this; },
+      get(key) { captured.get = key; return this; },
+      then(callback) {
+        callback({ setProperties(properties) { captured.properties = properties; } });
+        return this;
+      },
+      save() { captured.saved = true; return Promise.resolve(); }
+    };
+    window.html2pdf = () => worker;
+    document.querySelector('#printButton').click();
+    const openBeforeSave = document.querySelector('#outputDialog').open;
+    document.querySelector('#savePdfButton').click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    return JSON.stringify({
+      openBeforeSave,
+      openAfterSave: document.querySelector('#outputDialog').open,
+      fileName: captured.options.filename,
+      format: captured.options.jsPDF.format,
+      title: captured.properties.title,
+      creator: captured.properties.creator,
+      element: captured.element,
+      saved: captured.saved,
+      busy: document.querySelector('#outputDialog').getAttribute('aria-busy'),
+      focused: document.activeElement.id,
+      toast: document.querySelector('#toast').textContent
+    });
+  })()`));
+  assert.deepEqual(pdfDownload, {
+    openBeforeSave: true,
+    openAfterSave: false,
+    fileName: "August - Brew Invoice.pdf",
+    format: "a4",
+    title: "August - Brew Invoice",
+    creator: "Eng Hoon Residences Invoice Studio",
+    element: { id: "", transform: "none", width: "793px" },
+    saved: true,
+    busy: "false",
+    focused: "printButton",
+    toast: "August - Brew Invoice.pdf saved.",
+  });
+
+  const cacheReady = await waitFor(() => evaluate(page, "caches.keys().then(keys => keys.includes('invoice-studio-v19'))"));
   assert.equal(cacheReady, true);
   const workerSource = await readFile(join(ROOT, "sw.js"), "utf8");
   const handlers = {};
   const deletedCaches = [];
-  const cacheKeys = ["invoice-studio-v1", "invoice-studio-v18", "unrelated-app-cache"];
+  const cacheKeys = ["invoice-studio-v1", "invoice-studio-v19", "unrelated-app-cache"];
   const workerContext = {
     URL,
     Response,
@@ -549,6 +647,7 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
   await page.send("Page.reload", { ignoreCache: true });
   await waitFor(() => evaluate(page, "document.readyState === 'complete' && document.querySelector('#invoiceForm') !== null"), 8000);
   assert.equal(await evaluate(page, "typeof window.__offlineReloadMarker"), "undefined");
+  assert.equal(await evaluate(page, "typeof window.html2pdf"), "function");
   await page.send("Network.emulateNetworkConditions", {
     offline: false,
     latency: 0,
