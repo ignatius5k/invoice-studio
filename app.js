@@ -117,6 +117,10 @@ let draftConflictOperation;
 let draftConflictRemote;
 let resolveDraftConflictChoice;
 let pdfLibraryPromise;
+let authBusy = false;
+let pendingAuthEmailRequest = "";
+let pendingAuthEmailRequestUntil = 0;
+let authEmailRequestTimer;
 
 function normalizeInvoiceData(value) {
   if (!value || !Array.isArray(value.items) || value.items.length === 0) return null;
@@ -194,9 +198,65 @@ function setAuthMessage(message = "", stateName = "") {
   else authMessage.removeAttribute("data-state");
 }
 
+function normalizeAuthEmail(value) {
+  return String(value || "").trim().toLocaleLowerCase("en-SG");
+}
+
+function updateAuthEmailActions() {
+  if (authBusy) return;
+  if (pendingAuthEmailRequestUntil <= Date.now()) {
+    pendingAuthEmailRequest = "";
+    pendingAuthEmailRequestUntil = 0;
+  }
+  const emailRequestPending = Boolean(
+    pendingAuthEmailRequest
+      && normalizeAuthEmail(authEmail.value) === pendingAuthEmailRequest,
+  );
+  createAccountButton.disabled = emailRequestPending;
+  forgotPasswordButton.disabled = emailRequestPending;
+}
+
+function markAuthEmailRequested(email, retrySeconds = 60) {
+  pendingAuthEmailRequest = normalizeAuthEmail(email);
+  pendingAuthEmailRequestUntil = Date.now() + Math.max(1, retrySeconds) * 1000;
+  clearTimeout(authEmailRequestTimer);
+  authEmailRequestTimer = window.setTimeout(updateAuthEmailActions, Math.max(1, retrySeconds) * 1000);
+  updateAuthEmailActions();
+}
+
+function authEmailRetrySeconds(error) {
+  return Number(String(error?.message || "").match(/after\s+(\d+)\s+seconds?/i)?.[1]) || 0;
+}
+
+function authFailureMessage(error, action) {
+  const code = String(error?.code || "");
+  if (code === "email_not_confirmed") {
+    return "Confirm your email before signing in. Use the newest confirmation email, then return here.";
+  }
+  if (code === "over_email_send_rate_limit") {
+    const retrySeconds = authEmailRetrySeconds(error);
+    return retrySeconds
+      ? `A confirmation or reset email was requested too recently. Wait ${retrySeconds} seconds and use the newest email.`
+      : "The email sending limit has been reached. Use the newest email already received, or try again later.";
+  }
+  if (Number(error?.status) === 429 || code === "over_request_rate_limit") {
+    return action === "sign-in"
+      ? "Too many sign-in attempts were made. Wait a few minutes before trying again."
+      : "Too many requests were made. Wait a few minutes before trying again.";
+  }
+  if (code === "invalid_credentials") {
+    return "The email or password is incorrect.";
+  }
+  return error?.message || (action === "sign-in"
+    ? "Sign-in failed. Check your email and password."
+    : "The authentication request could not be completed.");
+}
+
 function setAuthBusy(isBusy) {
+  authBusy = isBusy;
   for (const button of authPage.querySelectorAll("button")) button.disabled = isBusy;
   authPage.setAttribute("aria-busy", String(isBusy));
+  if (!isBusy) updateAuthEmailActions();
 }
 
 function neutralizeDraftWrites() {
@@ -772,7 +832,7 @@ async function handleSignIn(event) {
     const { session } = await backend.signIn(email, password);
     if (session) await loadAuthenticatedWorkspace(session);
   } catch (error) {
-    setAuthMessage(error?.message || "Sign-in failed. Check your email and password.", "error");
+    setAuthMessage(authFailureMessage(error, "sign-in"), "error");
   } finally {
     setAuthBusy(false);
   }
@@ -790,10 +850,12 @@ async function handleCreateAccount() {
     if (session) {
       await loadAuthenticatedWorkspace(session);
     } else {
+      markAuthEmailRequested(email);
       setAuthMessage("Check your email to confirm the account, then return here to sign in.");
     }
   } catch (error) {
-    setAuthMessage(error?.message || "The account could not be created.", "error");
+    if (error?.code === "over_email_send_rate_limit") markAuthEmailRequested(email, authEmailRetrySeconds(error) || 60);
+    setAuthMessage(authFailureMessage(error, "sign-up"), "error");
   } finally {
     setAuthBusy(false);
   }
@@ -803,11 +865,14 @@ async function handlePasswordReset() {
   if (!authEmail.reportValidity()) return;
   setAuthBusy(true);
   setAuthMessage("Sending a password reset link...");
+  const email = authEmail.value.trim();
   try {
-    await backend.sendPasswordReset(authEmail.value.trim());
+    await backend.sendPasswordReset(email);
+    markAuthEmailRequested(email);
     setAuthMessage("If that email has an account, a password reset link is on its way.");
   } catch (error) {
-    setAuthMessage(error?.message || "The reset link could not be sent.", "error");
+    if (error?.code === "over_email_send_rate_limit") markAuthEmailRequested(email, authEmailRetrySeconds(error) || 60);
+    setAuthMessage(authFailureMessage(error, "password-reset"), "error");
   } finally {
     setAuthBusy(false);
   }
@@ -1978,6 +2043,9 @@ installButton.addEventListener("click", async () => {
 authForm.addEventListener("submit", handleSignIn);
 createAccountButton.addEventListener("click", handleCreateAccount);
 forgotPasswordButton.addEventListener("click", handlePasswordReset);
+authEmail.addEventListener("input", () => {
+  if (normalizeAuthEmail(authEmail.value) !== pendingAuthEmailRequest) updateAuthEmailActions();
+});
 passwordRecoveryForm.addEventListener("submit", handlePasswordRecovery);
 recoveryPasswordConfirm.addEventListener("input", () => recoveryPasswordConfirm.setCustomValidity(""));
 signOutButton.addEventListener("click", handleSignOut);

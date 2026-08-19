@@ -122,11 +122,12 @@ test("activation removes only previous Invoice Studio caches", async () => {
   const worker = await loadWorker();
   worker.stores.set("invoice-studio-v1", new Map());
   worker.stores.set("invoice-studio-v27", new Map());
+  worker.stores.set("invoice-studio-v28", new Map());
   worker.stores.set("unrelated-cache", new Map());
   let activation;
   worker.handlers.activate({ waitUntil(value) { activation = value; } });
   await activation;
-  assert.deepEqual(worker.deletedCaches, ["invoice-studio-v1"]);
+  assert.deepEqual(worker.deletedCaches, ["invoice-studio-v1", "invoice-studio-v27"]);
   assert.equal(worker.clientsClaimed, 1);
   assert.equal(worker.stores.has("unrelated-cache"), true);
 });
@@ -144,7 +145,7 @@ test("query-string navigations are network-only and never cached", async () => {
 });
 
 test("only named-cache shell requests are cached and used offline", async () => {
-  const shellUrl = `${SCOPE}app.js?v=27`;
+  const shellUrl = `${SCOPE}app.js?v=28`;
   const worker = await loadWorker(async () => new Response("fresh shell"));
   const onlineEvent = dispatchFetch(worker.handlers.fetch, {
     method: "GET",
@@ -153,7 +154,7 @@ test("only named-cache shell requests are cached and used offline", async () => 
   });
   assert.equal(await (await onlineEvent.response()).text(), "fresh shell");
   await Promise.all(onlineEvent.lifetime);
-  assert.deepEqual(worker.cachePuts, [{ cacheName: "invoice-studio-v27", key: shellUrl }]);
+  assert.deepEqual(worker.cachePuts, [{ cacheName: "invoice-studio-v28", key: shellUrl }]);
 
   worker.setFetch(async () => { throw new Error("offline"); });
   const offlineEvent = dispatchFetch(worker.handlers.fetch, {

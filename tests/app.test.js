@@ -1003,15 +1003,59 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
   });
 
   await evaluate(page, `(() => {
-    document.querySelector('#authEmail').value = 'new-owner@example.com';
+    document.querySelector('#authEmail').value = 'pending-owner@example.com';
+    document.querySelector('#authPassword').value = 'secure-pass-123';
+    window.__BROWSER_BACKEND_MOCK__.controls.nextSignInError = {
+      code: 'email_not_confirmed',
+      status: 400,
+      message: 'Email not confirmed'
+    };
+    document.querySelector('#authForm').requestSubmit();
+  })()`);
+  await waitFor(() => evaluate(page, "document.querySelector('#authMessage').textContent.includes('Confirm your email before signing in')"));
+
+  await evaluate(page, `(() => {
+    document.querySelector('#authPassword').value = 'secure-pass-123';
+    window.__BROWSER_BACKEND_MOCK__.controls.nextSignUpError = {
+      code: 'over_email_send_rate_limit',
+      status: 429,
+      message: 'For security purposes, you can only request this after 42 seconds.'
+    };
+    document.querySelector('#createAccountButton').click();
+  })()`);
+  await waitFor(() => evaluate(page, "document.querySelector('#authMessage').textContent.includes('Wait 42 seconds')"));
+  assert.deepEqual(JSON.parse(await evaluate(page, `JSON.stringify({
+    createDisabled: document.querySelector('#createAccountButton').disabled,
+    resetDisabled: document.querySelector('#forgotPasswordButton').disabled,
+    signUpCalls: window.__BROWSER_BACKEND_MOCK__.controls.signUpCalls
+  })`)), { createDisabled: true, resetDisabled: true, signUpCalls: 1 });
+
+  await evaluate(page, `(() => {
+    const email = document.querySelector('#authEmail');
+    email.value = 'new-owner@example.com';
+    email.dispatchEvent(new Event('input', { bubbles: true }));
     document.querySelector('#authPassword').value = 'secure-pass-123';
     document.querySelector('#createAccountButton').click();
   })()`);
   await waitFor(() => evaluate(page, "document.querySelector('#authMessage').textContent.includes('Check your email')"));
+  assert.deepEqual(JSON.parse(await evaluate(page, `JSON.stringify({
+    createDisabled: document.querySelector('#createAccountButton').disabled,
+    resetDisabled: document.querySelector('#forgotPasswordButton').disabled,
+    signUpCalls: window.__BROWSER_BACKEND_MOCK__.controls.signUpCalls
+  })`)), { createDisabled: true, resetDisabled: true, signUpCalls: 2 });
+
+  await evaluate(page, `(() => {
+    const email = document.querySelector('#authEmail');
+    email.value = 'recovery-owner@example.com';
+    email.dispatchEvent(new Event('input', { bubbles: true }));
+  })()`);
   await evaluate(page, "document.querySelector('#forgotPasswordButton').click(); true");
   await waitFor(() => evaluate(page, "document.querySelector('#authMessage').textContent.includes('reset link')"));
 
   await evaluate(page, `(() => {
+    const email = document.querySelector('#authEmail');
+    email.value = 'new-owner@example.com';
+    email.dispatchEvent(new Event('input', { bubbles: true }));
     document.querySelector('#authPassword').value = 'secure-pass-123';
     document.querySelector('#authForm').requestSubmit();
   })()`);
@@ -1129,12 +1173,12 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
   assert.match(backendSource, /\.eq\("revision", expectedRevision\)/);
   assert.match(backendSource, /error\.code = "INVOICE_REVISION_CONFLICT"/);
 
-  const cacheReady = await waitFor(() => evaluate(page, "caches.keys().then(keys => keys.includes('invoice-studio-v27'))"));
+  const cacheReady = await waitFor(() => evaluate(page, "caches.keys().then(keys => keys.includes('invoice-studio-v28'))"));
   assert.equal(cacheReady, true);
   const workerSource = await readFile(join(ROOT, "sw.js"), "utf8");
   const handlers = {};
   const deletedCaches = [];
-  const cacheKeys = ["invoice-studio-v1", "invoice-studio-v27", "unrelated-app-cache"];
+  const cacheKeys = ["invoice-studio-v1", "invoice-studio-v27", "invoice-studio-v28", "unrelated-app-cache"];
   const workerContext = {
     URL,
     Response,
@@ -1152,7 +1196,7 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
   let activation;
   handlers.activate({ waitUntil: (promise) => { activation = promise; } });
   await activation;
-  assert.deepEqual(deletedCaches, ["invoice-studio-v1"]);
+  assert.deepEqual(deletedCaches, ["invoice-studio-v1", "invoice-studio-v27"]);
 
   if (!await evaluate(page, "Boolean(navigator.serviceWorker.controller)")) {
     await page.send("Page.reload", { ignoreCache: true });

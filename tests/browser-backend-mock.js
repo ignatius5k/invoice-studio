@@ -9,8 +9,24 @@
     draftDeleteFailures: 0,
     listFailures: 0,
     signOutCalls: 0,
+    signInCalls: 0,
+    signUpCalls: 0,
+    passwordResetCalls: 0,
+    nextSignInError: null,
+    nextSignUpError: null,
+    nextPasswordResetError: null,
     listCalls: [],
   };
+
+  function throwNextAuthError(key) {
+    const details = controls[key];
+    controls[key] = null;
+    if (!details) return;
+    const error = new Error(details.message);
+    error.code = details.code;
+    error.status = details.status;
+    throw error;
+  }
 
   window.INVOICE_STUDIO_SUPABASE = {
     url: "https://test-project.supabase.co",
@@ -51,14 +67,21 @@
       return { unsubscribe() {} };
     },
     async signIn(email) {
+      controls.signInCalls += 1;
+      throwNextAuthError("nextSignInError");
       session = { user: { id: "test-user-1", email } };
       authCallback?.("SIGNED_IN", copy(session));
       return { session: copy(session), user: copy(session.user) };
     },
     async signUp(email) {
+      controls.signUpCalls += 1;
+      throwNextAuthError("nextSignUpError");
       return { session: null, user: { id: "pending-user", email } };
     },
-    async sendPasswordReset() {},
+    async sendPasswordReset() {
+      controls.passwordResetCalls += 1;
+      throwNextAuthError("nextPasswordResetError");
+    },
     async updatePassword() {
       return { user: copy(session.user) };
     },
