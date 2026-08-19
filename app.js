@@ -120,7 +120,7 @@ let pdfLibraryPromise;
 let authBusy = false;
 let pendingAuthEmailRequest = "";
 let pendingAuthEmailRequestUntil = 0;
-let authEmailRequestTimer;
+let authEmailRequestsBlockedUntil = 0;
 
 function normalizeInvoiceData(value) {
   if (!value || !Array.isArray(value.items) || value.items.length === 0) return null;
@@ -204,13 +204,13 @@ function normalizeAuthEmail(value) {
 
 function updateAuthEmailActions() {
   if (authBusy) return;
+  if (authEmailRequestsBlockedUntil <= Date.now()) authEmailRequestsBlockedUntil = 0;
   if (pendingAuthEmailRequestUntil <= Date.now()) {
     pendingAuthEmailRequest = "";
     pendingAuthEmailRequestUntil = 0;
   }
-  const emailRequestPending = Boolean(
-    pendingAuthEmailRequest
-      && normalizeAuthEmail(authEmail.value) === pendingAuthEmailRequest,
+  const emailRequestPending = authEmailRequestsBlockedUntil > Date.now() || Boolean(
+    pendingAuthEmailRequest && normalizeAuthEmail(authEmail.value) === pendingAuthEmailRequest,
   );
   createAccountButton.disabled = emailRequestPending;
   forgotPasswordButton.disabled = emailRequestPending;
@@ -219,8 +219,13 @@ function updateAuthEmailActions() {
 function markAuthEmailRequested(email, retrySeconds = 60) {
   pendingAuthEmailRequest = normalizeAuthEmail(email);
   pendingAuthEmailRequestUntil = Date.now() + Math.max(1, retrySeconds) * 1000;
-  clearTimeout(authEmailRequestTimer);
-  authEmailRequestTimer = window.setTimeout(updateAuthEmailActions, Math.max(1, retrySeconds) * 1000);
+  window.setTimeout(updateAuthEmailActions, Math.max(1, retrySeconds) * 1000);
+  updateAuthEmailActions();
+}
+
+function blockAuthEmailRequests(retrySeconds = 3600) {
+  authEmailRequestsBlockedUntil = Date.now() + Math.max(1, retrySeconds) * 1000;
+  window.setTimeout(updateAuthEmailActions, Math.max(1, retrySeconds) * 1000);
   updateAuthEmailActions();
 }
 
@@ -237,7 +242,7 @@ function authFailureMessage(error, action) {
     const retrySeconds = authEmailRetrySeconds(error);
     return retrySeconds
       ? `A confirmation or reset email was requested too recently. Wait ${retrySeconds} seconds and use the newest email.`
-      : "The email sending limit has been reached. Use the newest email already received, or try again later.";
+      : "This app's shared Supabase email limit has been reached. It applies across all email addresses. Use the newest email already received, or try again after the hourly allowance resets.";
   }
   if (Number(error?.status) === 429 || code === "over_request_rate_limit") {
     return action === "sign-in"
@@ -854,7 +859,11 @@ async function handleCreateAccount() {
       setAuthMessage("Check your email to confirm the account, then return here to sign in.");
     }
   } catch (error) {
-    if (error?.code === "over_email_send_rate_limit") markAuthEmailRequested(email, authEmailRetrySeconds(error) || 60);
+    if (error?.code === "over_email_send_rate_limit") {
+      const retrySeconds = authEmailRetrySeconds(error);
+      if (retrySeconds) markAuthEmailRequested(email, retrySeconds);
+      else blockAuthEmailRequests();
+    }
     setAuthMessage(authFailureMessage(error, "sign-up"), "error");
   } finally {
     setAuthBusy(false);
@@ -871,7 +880,11 @@ async function handlePasswordReset() {
     markAuthEmailRequested(email);
     setAuthMessage("If that email has an account, a password reset link is on its way.");
   } catch (error) {
-    if (error?.code === "over_email_send_rate_limit") markAuthEmailRequested(email, authEmailRetrySeconds(error) || 60);
+    if (error?.code === "over_email_send_rate_limit") {
+      const retrySeconds = authEmailRetrySeconds(error);
+      if (retrySeconds) markAuthEmailRequested(email, retrySeconds);
+      else blockAuthEmailRequests();
+    }
     setAuthMessage(authFailureMessage(error, "password-reset"), "error");
   } finally {
     setAuthBusy(false);

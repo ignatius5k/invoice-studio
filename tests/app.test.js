@@ -1054,6 +1054,31 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
 
   await evaluate(page, `(() => {
     const email = document.querySelector('#authEmail');
+    email.value = 'quota-test@example.com';
+    email.dispatchEvent(new Event('input', { bubbles: true }));
+    document.querySelector('#authPassword').value = 'secure-pass-123';
+    window.__BROWSER_BACKEND_MOCK__.controls.nextSignUpError = {
+      code: 'over_email_send_rate_limit',
+      status: 429,
+      message: 'email rate limit exceeded'
+    };
+    document.querySelector('#createAccountButton').click();
+  })()`);
+  await waitFor(() => evaluate(page, "document.querySelector('#authMessage').textContent.includes('applies across all email addresses')"));
+  const sharedQuotaState = JSON.parse(await evaluate(page, `(() => {
+    const email = document.querySelector('#authEmail');
+    email.value = 'another-address@example.com';
+    email.dispatchEvent(new Event('input', { bubbles: true }));
+    return JSON.stringify({
+      createDisabled: document.querySelector('#createAccountButton').disabled,
+      resetDisabled: document.querySelector('#forgotPasswordButton').disabled,
+      signInDisabled: document.querySelector('#signInButton').disabled
+    });
+  })()`));
+  assert.deepEqual(sharedQuotaState, { createDisabled: true, resetDisabled: true, signInDisabled: false });
+
+  await evaluate(page, `(() => {
+    const email = document.querySelector('#authEmail');
     email.value = 'new-owner@example.com';
     email.dispatchEvent(new Event('input', { bubbles: true }));
     document.querySelector('#authPassword').value = 'secure-pass-123';
