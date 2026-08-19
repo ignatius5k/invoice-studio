@@ -1,10 +1,10 @@
-const CACHE_NAME = "invoice-studio-v19";
+const CACHE_NAME = "invoice-studio-v24";
 const APP_SHELL = [
   "./",
   "./index.html",
-  "./styles.css?v=19",
-  "./vendor/html2pdf.bundle.min.js?v=19",
-  "./app.js?v=19",
+  "./styles.css?v=24",
+  "./vendor/html2pdf.bundle.min.js?v=24",
+  "./app.js?v=24",
   "./manifest.webmanifest",
   "./eng-hoon-residences-logo.jpeg",
   "./icon-192.png",

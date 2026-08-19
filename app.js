@@ -1,5 +1,6 @@
 const STORAGE_KEY = "invoice-studio-draft-v1";
 const SEQUENCE_KEY = "invoice-studio-sequence-v1";
+const HISTORY_KEY = "invoice-studio-history-v1";
 const PAPER_WIDTH = 793.7;
 const PAPER_HEIGHT = 1122.52;
 const MAX_QUANTITY = 9999;
@@ -22,8 +23,27 @@ const savePdfButtonLabel = document.querySelector("#savePdfButtonLabel");
 const printNowButton = document.querySelector("#printNowButton");
 const closeOutputDialogButton = document.querySelector("#closeOutputDialogButton");
 const cancelOutputDialogButton = document.querySelector("#cancelOutputDialogButton");
+const fitPreviewButton = document.querySelector("#fitPreviewButton");
+const actualSizePreviewButton = document.querySelector("#actualSizePreviewButton");
+const backToEditorButton = document.querySelector("#backToEditorButton");
+const invoiceListPage = document.querySelector("#invoiceListPage");
+const editorPage = document.querySelector("#editorPage");
+const invoiceListButton = document.querySelector("#invoiceListButton");
+const newInvoiceButton = document.querySelector("#newInvoiceButton");
+const printButton = document.querySelector("#printButton");
+const editorTitle = document.querySelector("#editorTitle");
+const invoiceHistoryList = document.querySelector("#invoiceHistoryList");
+const historyEmptyState = document.querySelector("#historyEmptyState");
+const historyNoResults = document.querySelector("#historyNoResults");
+const invoiceCount = document.querySelector("#invoiceCount");
+const invoiceSearch = document.querySelector("#invoiceSearch");
+const invoiceSearchField = document.querySelector("#invoiceSearchField");
+const historyNewInvoiceButton = document.querySelector("#historyNewInvoiceButton");
+const draftNotice = document.querySelector("#draftNotice");
+const draftNoticeSummary = document.querySelector("#draftNoticeSummary");
 
 let state = loadDraft() ?? createInvoiceDraft();
+let invoiceHistory = loadInvoiceHistory();
 let saveTimer;
 let toastTimer;
 let installPrompt;
@@ -31,24 +51,65 @@ let draftPersistenceEnabled = true;
 let draftChanged = false;
 let outputBusy = false;
 let outputDialogTrigger;
+let currentPage = "history";
+let historyQuery = "";
+let previewScaleMode = "fit";
+
+function normalizeInvoiceData(value) {
+  if (!value || !Array.isArray(value.items) || value.items.length === 0) return null;
+  const invoiceNumber = String(value.invoiceNumber || "").slice(0, 120);
+  const savedPdfFileName = String(value.pdfFileName || "").trim();
+  return {
+    historyId: typeof value.historyId === "string" ? value.historyId : undefined,
+    draftDirty: Boolean(value.draftDirty),
+    invoiceNumber,
+    pdfFileName: savedPdfFileName || invoiceNumber || "invoice",
+    pdfFileNameCustomized: Boolean(savedPdfFileName && savedPdfFileName !== invoiceNumber),
+    invoiceDate: String(value.invoiceDate || ""),
+    dueDate: String(value.dueDate || ""),
+    billTo: String(value.billTo || ""),
+    items: value.items.slice(0, 5).map((item, index) => ({
+      id: String(item?.id || `item-${Date.now()}-${index}`),
+      quantity: normalizeQuantity(item?.quantity),
+      description: String(item?.description || ""),
+      price: Number(item?.price) === 0 && !String(item?.description || "").trim() ? "" : item?.price ?? "",
+    })),
+  };
+}
 
 function loadDraft() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (!parsed || !Array.isArray(parsed.items) || parsed.items.length === 0) return null;
-    const savedPdfFileName = String(parsed.pdfFileName || "").trim();
-    parsed.pdfFileName = savedPdfFileName || parsed.invoiceNumber || "invoice";
-    parsed.pdfFileNameCustomized = Boolean(savedPdfFileName && savedPdfFileName !== parsed.invoiceNumber);
-    parsed.items = parsed.items.slice(0, 5).map((item) => ({
-      ...item,
-      quantity: normalizeQuantity(item.quantity),
-      price: Number(item.price) === 0 && !String(item.description || "").trim() ? "" : item.price,
-    }));
-    return parsed;
+    return normalizeInvoiceData(JSON.parse(raw));
   } catch {
     return null;
+  }
+}
+
+function loadInvoiceHistory() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]");
+    if (!Array.isArray(parsed)) return [];
+    const seen = new Set();
+    return parsed
+      .map((record) => {
+        const id = typeof record?.id === "string" ? record.id : "";
+        const invoice = normalizeInvoiceData(record?.invoice);
+        if (!id || seen.has(id) || !invoice) return null;
+        seen.add(id);
+        invoice.historyId = id;
+        return {
+          id,
+          createdAt: String(record.createdAt || record.updatedAt || ""),
+          updatedAt: String(record.updatedAt || record.createdAt || ""),
+          invoice,
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  } catch {
+    return [];
   }
 }
 
@@ -64,6 +125,7 @@ function createInvoiceDraft() {
   due.setDate(due.getDate() + 7);
   const invoiceNumber = nextInvoiceNumber(today);
   return {
+    draftDirty: false,
     invoiceNumber,
     pdfFileName: invoiceNumber,
     pdfFileNameCustomized: false,
@@ -90,7 +152,10 @@ function nextInvoiceNumber(date) {
 function saveDraft(markChanged = true) {
   clearTimeout(saveTimer);
   draftPersistenceEnabled = true;
-  if (markChanged) draftChanged = true;
+  if (markChanged) {
+    draftChanged = true;
+    state.draftDirty = true;
+  }
   saveStatus.textContent = "Saving...";
   saveTimer = window.setTimeout(() => {
     try {
@@ -126,7 +191,7 @@ function formatDate(value) {
 
 function formatAmount(value) {
   const numeric = Number(value);
-  return Number.isFinite(numeric) ? numeric.toFixed(2) : "—";
+  return Number.isFinite(numeric) ? numeric.toFixed(2) : "-";
 }
 
 function safePdfFileName(value, fallback) {
@@ -144,7 +209,251 @@ function safePdfFileName(value, fallback) {
 }
 
 function invoiceTotal() {
-  return state.items.reduce((total, item) => total + (Number(item.quantity) || 0) * (Number(item.price) || 0), 0);
+  return invoiceTotalFor(state);
+}
+
+function invoiceTotalFor(invoice) {
+  return invoice.items.reduce((total, item) => total + (Number(item.quantity) || 0) * (Number(item.price) || 0), 0);
+}
+
+function formatHistoryAmount(value) {
+  return new Intl.NumberFormat("en-SG", { style: "currency", currency: "SGD" }).format(value);
+}
+
+function cloneInvoice(invoice) {
+  return {
+    historyId: invoice.historyId,
+    draftDirty: Boolean(invoice.draftDirty),
+    invoiceNumber: invoice.invoiceNumber,
+    pdfFileName: invoice.pdfFileName,
+    pdfFileNameCustomized: invoice.pdfFileNameCustomized,
+    invoiceDate: invoice.invoiceDate,
+    dueDate: invoice.dueDate,
+    billTo: invoice.billTo,
+    items: invoice.items.map((item) => ({ ...item })),
+  };
+}
+
+function invoiceFingerprint(invoice) {
+  return JSON.stringify({
+    invoiceNumber: invoice.invoiceNumber,
+    pdfFileName: invoice.pdfFileName,
+    invoiceDate: invoice.invoiceDate,
+    dueDate: invoice.dueDate,
+    billTo: invoice.billTo,
+    items: invoice.items.map(({ quantity, description, price }) => ({ quantity, description, price })),
+  });
+}
+
+function hasUnsavedDraft() {
+  if (state.historyId) {
+    const savedRecord = invoiceHistory.find((record) => record.id === state.historyId);
+    return !savedRecord || invoiceFingerprint(savedRecord.invoice) !== invoiceFingerprint(state);
+  }
+  return Boolean(state.draftDirty || hasEnteredContent());
+}
+
+function historyRecordId() {
+  if (typeof crypto.randomUUID === "function") return `invoice-${crypto.randomUUID()}`;
+  return `invoice-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function saveCurrentInvoiceToHistory() {
+  const now = new Date().toISOString();
+  const id = state.historyId || historyRecordId();
+  const existingRecord = invoiceHistory.find((record) => record.id === id);
+  const savedInvoice = cloneInvoice({ ...state, historyId: id, draftDirty: false });
+  const savedRecord = {
+    id,
+    createdAt: existingRecord?.createdAt || now,
+    updatedAt: now,
+    invoice: savedInvoice,
+  };
+  const nextHistory = [savedRecord, ...invoiceHistory.filter((record) => record.id !== id)];
+
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(nextHistory));
+  } catch {
+    saveStatus.textContent = "Could not save invoice history on this device";
+    showToast("The invoice could not be added to history on this device.");
+    return false;
+  }
+
+  state.historyId = id;
+  state.draftDirty = false;
+  invoiceHistory = nextHistory;
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  } catch {
+    // The history record is the authoritative saved copy; draft persistence is best effort.
+  }
+  draftChanged = false;
+  saveStatus.textContent = existingRecord ? "Invoice changes saved" : "Invoice saved to history";
+  renderInvoiceHistory();
+  return true;
+}
+
+function createHistoryMeta(label, value) {
+  const wrapper = document.createElement("div");
+  const term = document.createElement("dt");
+  const description = document.createElement("dd");
+  term.textContent = label;
+  description.textContent = value;
+  wrapper.append(term, description);
+  return wrapper;
+}
+
+function renderInvoiceHistory() {
+  const query = historyQuery.trim().toLocaleLowerCase("en-SG");
+  const visibleRecords = invoiceHistory.filter((record) => {
+    if (!query) return true;
+    return `${record.invoice.invoiceNumber} ${record.invoice.billTo}`.toLocaleLowerCase("en-SG").includes(query);
+  });
+
+  invoiceHistoryList.replaceChildren();
+  visibleRecords.forEach((record) => {
+    const invoice = record.invoice;
+    const article = document.createElement("article");
+    article.className = "invoice-record";
+    article.dataset.invoiceId = record.id;
+
+    const identity = document.createElement("div");
+    const number = document.createElement("h3");
+    const customer = document.createElement("p");
+    number.className = "invoice-number";
+    number.id = `invoice-title-${record.id}`;
+    number.textContent = invoice.invoiceNumber || "Untitled invoice";
+    article.setAttribute("aria-labelledby", number.id);
+    customer.className = "invoice-customer";
+    customer.textContent = invoice.billTo.trim() || "No customer name";
+    identity.append(number, customer);
+
+    const meta = document.createElement("dl");
+    meta.className = "invoice-record-meta";
+    meta.append(
+      createHistoryMeta("Invoice date", formatDate(invoice.invoiceDate) || "-"),
+      createHistoryMeta("Items", String(invoice.items.length)),
+      createHistoryMeta("Total", formatHistoryAmount(invoiceTotalFor(invoice))),
+    );
+
+    const actions = document.createElement("div");
+    actions.className = "invoice-record-actions";
+    const edit = document.createElement("button");
+    edit.type = "button";
+    edit.className = "button button-secondary";
+    edit.dataset.editInvoice = record.id;
+    edit.textContent = "Edit";
+    edit.setAttribute("aria-label", `Edit invoice ${invoice.invoiceNumber}`);
+    const duplicate = document.createElement("button");
+    duplicate.type = "button";
+    duplicate.className = "button button-secondary";
+    duplicate.dataset.duplicateInvoice = record.id;
+    duplicate.textContent = "Duplicate";
+    duplicate.setAttribute("aria-label", `Duplicate invoice ${invoice.invoiceNumber}`);
+    actions.append(edit, duplicate);
+
+    article.append(identity, meta, actions);
+    invoiceHistoryList.append(article);
+  });
+
+  const total = invoiceHistory.length;
+  invoiceCount.textContent = query
+    ? `${visibleRecords.length} of ${total} ${total === 1 ? "invoice" : "invoices"}`
+    : `${total} ${total === 1 ? "invoice" : "invoices"}`;
+  invoiceSearchField.hidden = total < 2;
+  historyNewInvoiceButton.hidden = total === 0;
+  historyEmptyState.hidden = total !== 0;
+  historyNoResults.hidden = total === 0 || visibleRecords.length !== 0;
+
+  const showDraft = hasUnsavedDraft();
+  draftNotice.hidden = !showDraft;
+  if (showDraft) {
+    const customer = state.billTo.trim() || "Untitled invoice";
+    draftNoticeSummary.textContent = `${state.invoiceNumber} for ${customer}, ${formatHistoryAmount(invoiceTotal())}`;
+  }
+}
+
+function clearValidationErrors() {
+  form.querySelectorAll('[aria-invalid="true"]').forEach(clearFieldError);
+}
+
+function showEditorPage(mode = "new", focusEditor = true) {
+  currentPage = "editor";
+  document.body.dataset.page = "editor";
+  invoiceListPage.hidden = true;
+  editorPage.hidden = false;
+  invoiceListButton.hidden = false;
+  newInvoiceButton.hidden = false;
+  printButton.hidden = false;
+  editorTitle.textContent = mode === "edit" ? "Edit invoice" : mode === "duplicate" ? "Review duplicated invoice" : "Create an invoice";
+  document.title = state.invoiceNumber ? `${state.invoiceNumber} | Invoice Studio` : "Invoice Studio";
+  window.scrollTo({ top: 0 });
+  requestAnimationFrame(() => {
+    updatePreviewScale();
+    if (focusEditor) document.querySelector(mode === "edit" ? "#invoiceNumber" : "#billTo")?.focus();
+  });
+}
+
+function showInvoiceList(focusHeading = true) {
+  persistDraftImmediately();
+  currentPage = "history";
+  document.body.dataset.page = "history";
+  editorPage.hidden = true;
+  invoiceListPage.hidden = false;
+  invoiceListButton.hidden = true;
+  newInvoiceButton.hidden = true;
+  printButton.hidden = true;
+  document.title = "Invoices | Invoice Studio";
+  renderInvoiceHistory();
+  window.scrollTo({ top: 0 });
+  if (focusHeading) document.querySelector("#invoiceListTitle")?.focus({ preventScroll: true });
+}
+
+function canReplaceCurrentDraft(message) {
+  return !hasUnsavedDraft() || window.confirm(message);
+}
+
+function editSavedInvoice(id) {
+  const record = invoiceHistory.find((candidate) => candidate.id === id);
+  if (!record || !canReplaceCurrentDraft("Open this invoice and replace your unsaved draft?")) return;
+  clearTimeout(saveTimer);
+  clearValidationErrors();
+  state = cloneInvoice(record.invoice);
+  state.historyId = record.id;
+  draftChanged = false;
+  draftPersistenceEnabled = true;
+  fillForm();
+  persistDraftImmediately();
+  saveStatus.textContent = "Saved invoice loaded";
+  showEditorPage("edit");
+}
+
+function duplicateSavedInvoice(id) {
+  const record = invoiceHistory.find((candidate) => candidate.id === id);
+  if (!record || !canReplaceCurrentDraft("Duplicate this invoice and replace your unsaved draft?")) return;
+  clearTimeout(saveTimer);
+  clearValidationErrors();
+  const freshInvoice = createInvoiceDraft();
+  state = {
+    ...cloneInvoice(record.invoice),
+    historyId: undefined,
+    draftDirty: true,
+    invoiceNumber: freshInvoice.invoiceNumber,
+    pdfFileName: freshInvoice.invoiceNumber,
+    pdfFileNameCustomized: false,
+    invoiceDate: freshInvoice.invoiceDate,
+    dueDate: freshInvoice.dueDate,
+    items: record.invoice.items.map((item, index) => ({
+      ...item,
+      id: `item-${Date.now()}-${index}-${Math.random().toString(16).slice(2)}`,
+    })),
+  };
+  draftChanged = true;
+  draftPersistenceEnabled = true;
+  fillForm();
+  persistDraftImmediately();
+  saveStatus.textContent = "Duplicate ready. Not yet saved.";
+  showEditorPage("duplicate");
 }
 
 function setText(selector, value) {
@@ -249,7 +558,7 @@ function renderItemsEditor() {
     quantity.max = String(MAX_QUANTITY);
     quantity.step = "1";
     quantity.inputMode = "numeric";
-    quantity.value = normalizeQuantity(item.quantity);
+    quantity.value = item.quantity;
     quantity.required = true;
     quantity.dataset.itemField = "quantity";
     quantity.setAttribute("aria-label", `Quantity for item ${index + 1}`);
@@ -301,10 +610,22 @@ function renderItemsEditor() {
     remove.setAttribute("aria-label", `Remove item ${index + 1}`);
     remove.title = remove.disabled ? "At least one item is required" : `Remove item ${index + 1}`;
 
+    const descriptionField = createField("mobile-field description-field", `Item ${index + 1}`, description, `description-${item.id}`);
+    const bold = document.createElement("button");
+    bold.type = "button";
+    bold.className = "item-format-button";
+    bold.textContent = "Bold";
+    bold.setAttribute("aria-label", `Bold selected text in item ${index + 1}`);
+    bold.addEventListener("click", () => {
+      toggleBoldFormatting(description);
+      description.focus();
+    });
+    descriptionField.append(bold);
+
     row.append(
       createField("mobile-field", "Quantity", quantity, `quantity-${item.id}`),
-      createField("mobile-field", "Item", description, `description-${item.id}`),
-      createField("mobile-field", "Price", price, `price-${item.id}`),
+      descriptionField,
+      createField("mobile-field", "Unit price (SGD)", price, `price-${item.id}`),
       remove,
     );
     itemsEditor.append(row);
@@ -347,6 +668,14 @@ function renderPreview() {
 function handleFieldInput(event) {
   const field = event.target.dataset.field;
   if (!field) return;
+  if (field === "invoiceNumber") {
+    const selectionStart = event.target.selectionStart;
+    const selectionEnd = event.target.selectionEnd;
+    event.target.value = event.target.value.toLocaleUpperCase("en-SG");
+    if (selectionStart !== null && selectionEnd !== null) {
+      event.target.setSelectionRange(selectionStart, selectionEnd);
+    }
+  }
   state[field] = event.target.value;
   if (field === "pdfFileName") {
     state.pdfFileNameCustomized = Boolean(event.target.value.trim() && event.target.value !== state.invoiceNumber);
@@ -416,25 +745,46 @@ function isoDate(date) {
 }
 
 function newInvoice() {
-  if ((draftChanged || hasEnteredContent()) && !window.confirm("Start a new invoice and replace the current draft?")) return;
+  const canUseCurrentBlankDraft = currentPage === "history" && !state.historyId && !hasUnsavedDraft();
+  if (canUseCurrentBlankDraft) {
+    saveStatus.textContent = "Draft ready";
+    showEditorPage("new");
+    return;
+  }
+  if (!canReplaceCurrentDraft("Start a new invoice and replace the current unsaved draft?")) return;
+  clearValidationErrors();
   state = createInvoiceDraft();
   draftChanged = false;
+  draftPersistenceEnabled = true;
   fillForm();
   saveDraft(false);
-  document.querySelector("#billTo").focus();
+  showEditorPage("new");
   showToast("New invoice ready.");
 }
 
 function clearSavedDraft() {
   if (!window.confirm("Clear the saved invoice draft from this browser?")) return;
+  resetDraft();
+  saveStatus.textContent = "Saved draft cleared";
+  showToast("Saved draft cleared from this browser.");
+}
+
+function resetDraft() {
   clearTimeout(saveTimer);
   localStorage.removeItem(STORAGE_KEY);
   state = createInvoiceDraft();
   draftChanged = false;
   draftPersistenceEnabled = false;
+  clearValidationErrors();
   fillForm();
-  saveStatus.textContent = "Saved draft cleared";
-  showToast("Saved draft cleared from this browser.");
+}
+
+function deleteUnsavedDraft() {
+  if (!window.confirm("Delete this unsaved draft? This cannot be undone.")) return;
+  resetDraft();
+  renderInvoiceHistory();
+  saveStatus.textContent = "Draft deleted";
+  showToast("Unsaved draft deleted.");
 }
 
 function hasEnteredContent() {
@@ -509,6 +859,11 @@ function viewPreview() {
   previewPanel.focus({ preventScroll: true });
 }
 
+function viewEditor() {
+  document.querySelector("#editorTitle").scrollIntoView({ behavior: "smooth", block: "start" });
+  document.querySelector("#editorTitle").focus({ preventScroll: true });
+}
+
 function invoiceIsReady(action) {
   const invalidInputs = validateForm();
   if (invalidInputs.length) {
@@ -529,6 +884,7 @@ function invoiceIsReady(action) {
 
 function openOutputDialog(event) {
   if (!invoiceIsReady("saving or printing")) return;
+  if (!saveCurrentInvoiceToHistory()) return;
   outputDialogTrigger = event.currentTarget;
   outputFileName.textContent = `${safePdfFileName(state.pdfFileName, state.invoiceNumber)}.pdf`;
   outputDialog.showModal();
@@ -614,10 +970,11 @@ function printInvoice() {
     return;
   }
   dismissOutputDialog();
+  const previousTitle = document.title;
   document.title = `${safePdfFileName(state.pdfFileName, state.invoiceNumber)}.pdf`;
   window.print();
   window.setTimeout(() => {
-    document.title = "Invoice Studio";
+    document.title = previousTitle;
   }, 500);
 }
 
@@ -634,10 +991,17 @@ function updatePreviewScale() {
   const stageStyles = window.getComputedStyle(previewStage);
   const horizontalPadding = Number.parseFloat(stageStyles.paddingLeft) + Number.parseFloat(stageStyles.paddingRight);
   const availableWidth = Math.max(1, previewStage.clientWidth - horizontalPadding);
-  const scale = Math.min(1, availableWidth / PAPER_WIDTH);
+  const scale = previewScaleMode === "actual" ? 1 : Math.min(1, availableWidth / PAPER_WIDTH);
   invoiceSheet.style.transform = `scale(${scale})`;
   paperScaleWrap.style.width = `${PAPER_WIDTH * scale}px`;
   paperScaleWrap.style.height = `${PAPER_HEIGHT * scale}px`;
+}
+
+function setPreviewScaleMode(mode) {
+  previewScaleMode = mode;
+  fitPreviewButton.setAttribute("aria-pressed", String(mode === "fit"));
+  actualSizePreviewButton.setAttribute("aria-pressed", String(mode === "actual"));
+  updatePreviewScale();
 }
 
 function updateConnectionStatus() {
@@ -667,12 +1031,38 @@ itemsEditor.addEventListener("click", (event) => {
   if (button) removeItem(button.dataset.removeItem);
 });
 document.querySelector("#addItemButton").addEventListener("click", addItem);
-document.querySelector("#newInvoiceButton").addEventListener("click", newInvoice);
+newInvoiceButton.addEventListener("click", newInvoice);
 document.querySelector("#mobileNewInvoiceButton").addEventListener("click", newInvoice);
+historyNewInvoiceButton.addEventListener("click", newInvoice);
+document.querySelector("#emptyStateNewInvoiceButton").addEventListener("click", newInvoice);
+document.querySelector("#continueDraftButton").addEventListener("click", () => {
+  const mode = state.historyId ? "edit" : "new";
+  fillForm();
+  saveStatus.textContent = "Draft restored";
+  showEditorPage(mode);
+});
+document.querySelector("#deleteDraftButton").addEventListener("click", deleteUnsavedDraft);
+invoiceListButton.addEventListener("click", () => showInvoiceList());
+invoiceHistoryList.addEventListener("click", (event) => {
+  const editButton = event.target.closest("[data-edit-invoice]");
+  if (editButton) {
+    editSavedInvoice(editButton.dataset.editInvoice);
+    return;
+  }
+  const duplicateButton = event.target.closest("[data-duplicate-invoice]");
+  if (duplicateButton) duplicateSavedInvoice(duplicateButton.dataset.duplicateInvoice);
+});
+invoiceSearch.addEventListener("input", () => {
+  historyQuery = invoiceSearch.value;
+  renderInvoiceHistory();
+});
 document.querySelector("#clearDraftButton").addEventListener("click", clearSavedDraft);
-document.querySelector("#printButton").addEventListener("click", openOutputDialog);
+printButton.addEventListener("click", openOutputDialog);
 document.querySelector("#mobilePrintButton").addEventListener("click", openOutputDialog);
 document.querySelector("#mobileViewPreviewButton").addEventListener("click", viewPreview);
+fitPreviewButton.addEventListener("click", () => setPreviewScaleMode("fit"));
+actualSizePreviewButton.addEventListener("click", () => setPreviewScaleMode("actual"));
+backToEditorButton.addEventListener("click", viewEditor);
 savePdfButton.addEventListener("click", downloadInvoicePdf);
 printNowButton.addEventListener("click", printInvoice);
 closeOutputDialogButton.addEventListener("click", closeOutputDialog);
@@ -731,3 +1121,4 @@ window.addEventListener("afterprint", updatePreviewScale);
 fillForm();
 updateConnectionStatus();
 updatePreviewScale();
+showInvoiceList(false);

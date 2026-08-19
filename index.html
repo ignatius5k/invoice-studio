@@ -4,12 +4,12 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="theme-color" content="#f2f3f5" />
-    <meta name="description" content="Create print-ready Eng Hoon Residences invoices in under a minute." />
+    <meta name="description" content="Create, save, edit, and duplicate print-ready Eng Hoon Residences invoices." />
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self'; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'" />
     <link rel="manifest" href="./manifest.webmanifest" />
     <link rel="icon" href="./icon-192.png" />
     <link rel="apple-touch-icon" href="./icon-192.png" />
-    <link rel="stylesheet" href="./styles.css?v=19" />
+    <link rel="stylesheet" href="./styles.css?v=24" />
     <title>Invoice Studio</title>
   </head>
   <body>
@@ -26,28 +26,79 @@
         </div>
       </div>
       <div class="header-actions">
+        <button id="invoiceListButton" class="button button-secondary" type="button" hidden>Back</button>
         <button id="installButton" class="button button-secondary" type="button" hidden>Install app</button>
-        <button id="newInvoiceButton" class="button button-secondary" type="button">New invoice</button>
-        <button id="printButton" class="button button-primary" type="button">Save invoice</button>
+        <button id="newInvoiceButton" class="button button-secondary" type="button" hidden>New invoice</button>
+        <button id="printButton" class="button button-primary" type="button" hidden>Save invoice</button>
       </div>
     </header>
 
-    <main class="workspace">
+    <main id="invoiceListPage" class="history-page" aria-labelledby="invoiceListTitle">
+      <section class="history-hero">
+        <div>
+          <h1 id="invoiceListTitle" tabindex="-1">Invoices</h1>
+          <p class="history-intro">Create, edit, and duplicate invoices saved on this device.</p>
+        </div>
+        <button id="historyNewInvoiceButton" class="button button-primary" type="button">Create invoice</button>
+      </section>
+
+      <aside id="draftNotice" class="draft-notice" aria-labelledby="draftNoticeTitle" hidden>
+        <div>
+          <p class="draft-notice-label">Unsaved draft</p>
+          <h2 id="draftNoticeTitle">Continue where you left off</h2>
+          <p id="draftNoticeSummary"></p>
+        </div>
+        <div class="draft-notice-actions">
+          <button id="continueDraftButton" class="button button-secondary" type="button">Continue editing</button>
+          <button id="deleteDraftButton" class="button button-danger" type="button">Delete draft</button>
+        </div>
+      </aside>
+
+      <section class="history-section" aria-labelledby="savedInvoicesTitle">
+        <div class="history-section-heading">
+          <div>
+            <h2 id="savedInvoicesTitle">Saved invoices</h2>
+            <p id="invoiceCount" class="history-count" aria-live="polite">0 invoices</p>
+          </div>
+          <div id="invoiceSearchField" class="history-search" hidden>
+            <label for="invoiceSearch">Search invoices</label>
+            <input id="invoiceSearch" type="search" autocomplete="off" aria-describedby="invoiceSearchHelp" />
+            <span id="invoiceSearchHelp" class="visually-hidden">Enter an invoice number or customer name.</span>
+          </div>
+        </div>
+
+        <div id="invoiceHistoryList" class="invoice-history-list"></div>
+
+        <div id="historyEmptyState" class="history-empty-state">
+          <h2>No saved invoices yet</h2>
+          <p>Your saved invoices will appear here, ready to edit or duplicate.</p>
+          <button id="emptyStateNewInvoiceButton" class="button button-primary" type="button">Create your first invoice</button>
+        </div>
+
+        <div id="historyNoResults" class="history-empty-state history-no-results" hidden>
+          <h2>No matching invoices</h2>
+          <p>Try a different invoice number or customer name.</p>
+        </div>
+      </section>
+      <p class="history-storage-note">Invoices are stored only in this browser on this device.</p>
+    </main>
+
+    <main id="editorPage" class="workspace" hidden>
       <section class="editor-panel" aria-labelledby="editorTitle">
         <div class="panel-heading">
           <div>
-            <p class="section-kicker">Invoice editor</p>
-            <h1 id="editorTitle">Create an invoice</h1>
+            <h1 id="editorTitle" tabindex="-1">Create an invoice</h1>
           </div>
           <p id="saveStatus" class="save-status" role="status" aria-live="polite">Draft ready</p>
         </div>
+        <button id="mobileViewPreviewButton" class="button button-secondary stacked-preview-button" type="button">View preview</button>
 
         <form id="invoiceForm" novalidate>
           <fieldset class="form-section">
             <legend>Invoice details</legend>
             <div class="field-stack">
               <label for="invoiceNumber">Invoice number</label>
-              <input id="invoiceNumber" name="invoiceNumber" data-field="invoiceNumber" type="text" autocomplete="off" required />
+              <input id="invoiceNumber" name="invoiceNumber" data-field="invoiceNumber" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" required />
             </div>
             <div class="field-grid field-grid-two">
               <div class="field-stack">
@@ -77,15 +128,17 @@
 
           <fieldset class="form-section items-section">
             <legend>Products / services</legend>
-            <span class="currency-label" aria-hidden="true">SGD</span>
             <div class="item-column-labels" aria-hidden="true">
               <span>Qty</span>
               <span>Item</span>
-              <span>Price</span>
+              <span>Unit price (SGD)</span>
               <span></span>
             </div>
             <div id="itemsEditor" class="items-editor"></div>
-            <p id="itemFormattingHelp" class="field-help item-formatting-help">Press Enter for a new line. Select item text and press Ctrl+B (Cmd+B on Mac) to bold it.</p>
+            <p id="itemFormattingHelp" class="field-help item-formatting-help">
+              <span class="desktop-formatting-help">Press Enter for a new line. Select item text and press Ctrl+B (Cmd+B on Mac) to bold it.</span>
+              <span class="mobile-formatting-help">Select item text, then choose Bold.</span>
+            </p>
             <p id="itemLimitHelp" class="field-help item-limit-help">Up to 5 items fit the one-page invoice.</p>
             <button id="addItemButton" class="button button-secondary add-item-button" type="button" aria-describedby="itemLimitHelp">Add item</button>
             <div class="editor-total" aria-live="polite" aria-atomic="true">
@@ -97,7 +150,6 @@
 
         <div class="mobile-output-action">
           <button id="mobileNewInvoiceButton" class="button button-secondary" type="button">New invoice</button>
-          <button id="mobileViewPreviewButton" class="button button-secondary" type="button">View preview</button>
           <button id="mobilePrintButton" class="button button-primary" type="button">Save invoice</button>
         </div>
         <button id="clearDraftButton" class="clear-draft-button" type="button">Clear saved draft</button>
@@ -109,7 +161,14 @@
             <h2 id="previewTitle">Invoice preview</h2>
             <p>A4, 210 x 297 mm</p>
           </div>
-          <span class="preview-hint">Updates as you type</span>
+          <div class="preview-toolbar-actions">
+            <span class="preview-hint">Updates as you type</span>
+            <div class="preview-zoom-controls" role="group" aria-label="Preview zoom">
+              <button id="fitPreviewButton" class="preview-tool-button" type="button" aria-pressed="true">Fit</button>
+              <button id="actualSizePreviewButton" class="preview-tool-button" type="button" aria-pressed="false">100%</button>
+            </div>
+            <button id="backToEditorButton" class="preview-tool-button preview-back-button" type="button">Back to editor</button>
+          </div>
         </div>
         <div id="previewStage" class="preview-stage">
           <div id="paperScaleWrap" class="paper-scale-wrap">
@@ -171,7 +230,7 @@
               </table>
 
               <section class="invoice-notes" aria-label="Booking terms">
-                <p>Please note that all payments made for pop-up booth bookings are non-refundable upon confirmation, as the space will be reserved exclusively for you.</p>
+                <p>Please note that all payments made for weekend market space bookings are non-refundable upon confirmation, as the space will be reserved exclusively for you.</p>
                 <p>Should you be unable to participate, we may, at our discretion and subject to availability, allow your booking to be transferred to a replacement date or future pop-up event.</p>
               </section>
 
@@ -195,10 +254,9 @@
 
     <dialog id="outputDialog" class="output-dialog" aria-labelledby="outputDialogTitle" aria-describedby="outputDialogDescription">
       <div class="output-dialog-card">
-        <button id="closeOutputDialogButton" class="dialog-close-button" type="button" aria-label="Close save options">&times;</button>
-        <p class="section-kicker">Output options</p>
-        <h2 id="outputDialogTitle">Save invoice</h2>
-        <p id="outputDialogDescription" class="output-dialog-description">Download a named PDF file, or open your device's print window.</p>
+        <button id="closeOutputDialogButton" class="dialog-close-button" type="button" aria-label="Close output options">&times;</button>
+        <h2 id="outputDialogTitle">Invoice saved</h2>
+        <p id="outputDialogDescription" class="output-dialog-description">The invoice is in your history. Download a PDF or print a copy now.</p>
         <div class="output-file-summary">
           <span>PDF file name</span>
           <strong id="outputFileName"></strong>
@@ -213,13 +271,13 @@
             <span class="output-option-description">Opens the print window for a printer or other destination.</span>
           </button>
         </div>
-        <button id="cancelOutputDialogButton" class="button button-secondary output-cancel-button" type="button">Cancel</button>
+        <button id="cancelOutputDialogButton" class="button button-secondary output-cancel-button" type="button">Done</button>
       </div>
     </dialog>
 
     <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
     <noscript>This app needs JavaScript to create invoices.</noscript>
-    <script src="./vendor/html2pdf.bundle.min.js?v=19" defer></script>
-    <script src="./app.js?v=19" defer></script>
+    <script src="./vendor/html2pdf.bundle.min.js?v=24" defer></script>
+    <script src="./app.js?v=24" defer></script>
   </body>
 </html>

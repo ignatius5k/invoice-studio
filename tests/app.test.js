@@ -10,6 +10,9 @@ const vm = require("node:vm");
 const ROOT = join(__dirname, "..");
 const CHROME_CANDIDATES = [
   process.env.CHROME_PATH,
+  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+  "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+  "/Applications/Chromium.app/Contents/MacOS/Chromium",
   "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
   "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
   "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
@@ -142,6 +145,35 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
 
   await evaluate(page, "localStorage.clear(); location.reload(); true");
   await waitFor(() => evaluate(page, "document.readyState === 'complete' && document.querySelectorAll('.item-row').length === 1"));
+  const landingState = JSON.parse(await evaluate(page, `JSON.stringify({
+    page: document.body.dataset.page,
+    historyVisible: !document.querySelector('#invoiceListPage').hidden,
+    editorHidden: document.querySelector('#editorPage').hidden,
+    emptyState: !document.querySelector('#historyEmptyState').hidden,
+    count: document.querySelector('#invoiceCount').textContent,
+    createActions: ['newInvoiceButton', 'historyNewInvoiceButton', 'emptyStateNewInvoiceButton']
+      .filter(id => document.getElementById(id).getClientRects().length > 0).length
+  })`));
+  assert.deepEqual(landingState, { page: "history", historyVisible: true, editorHidden: true, emptyState: true, count: "0 invoices", createActions: 1 });
+  for (const width of [320, 390, 700, 1000, 1440]) {
+    await page.send("Emulation.setDeviceMetricsOverride", { width, height: 900, deviceScaleFactor: 1, mobile: width < 500 });
+    const historyLayout = JSON.parse(await evaluate(page, `JSON.stringify({
+      viewport: innerWidth,
+      documentWidth: document.documentElement.scrollWidth,
+      page: (() => { const rect = document.querySelector('#invoiceListPage').getBoundingClientRect(); return { left: rect.left, right: rect.right }; })(),
+      empty: (() => { const rect = document.querySelector('#historyEmptyState').getBoundingClientRect(); return { left: rect.left, right: rect.right }; })()
+    })`));
+    assert.ok(historyLayout.documentWidth <= historyLayout.viewport, `${width}px history must not overflow`);
+    assert.ok(historyLayout.page.left >= 0 && historyLayout.page.right <= historyLayout.viewport, `${width}px history page bounds`);
+    assert.ok(historyLayout.empty.left >= 0 && historyLayout.empty.right <= historyLayout.viewport, `${width}px empty state bounds`);
+  }
+  await evaluate(page, "document.querySelector('#historyNewInvoiceButton').click(); true");
+  await waitFor(() => evaluate(page, "document.body.dataset.page === 'editor' && !document.querySelector('#editorPage').hidden"));
+  const backNavigation = JSON.parse(await evaluate(page, `JSON.stringify({
+    label: document.querySelector('#invoiceListButton').textContent,
+    beforeInstall: Boolean(document.querySelector('#invoiceListButton').compareDocumentPosition(document.querySelector('#installButton')) & Node.DOCUMENT_POSITION_FOLLOWING)
+  })`));
+  assert.deepEqual(backNavigation, { label: "Back", beforeInstall: true });
   const cleanDraft = await evaluate(page, `JSON.stringify({
     invoiceNumber: document.querySelector('#invoiceNumber').value,
     pdfFileName: document.querySelector('#pdfFileName').value,
@@ -166,8 +198,8 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
       plain: [...fieldset.querySelector(':scope > legend')?.childNodes || []].every(node => node.nodeType === Node.TEXT_NODE)
     })),
     productsName: document.querySelector('.items-section > legend')?.textContent,
-    currencySibling: document.querySelector('.items-section > legend + .currency-label')?.textContent,
-    currencyHidden: document.querySelector('.currency-label')?.getAttribute('aria-hidden'),
+    itemColumns: [...document.querySelectorAll('.item-column-labels span')].map(label => label.textContent),
+    detachedCurrencyLabels: document.querySelectorAll('.currency-label').length,
     addHelp: document.querySelector('#addItemButton').getAttribute('aria-describedby'),
     addHelpText: document.querySelector('#itemLimitHelp').textContent,
     totalAtomic: document.querySelector('.editor-total').getAttribute('aria-atomic'),
@@ -175,8 +207,8 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
   })`));
   assert.ok(semantics.legends.every((legend) => legend.direct === 1 && legend.first === "LEGEND" && legend.plain));
   assert.equal(semantics.productsName, "Products / services");
-  assert.equal(semantics.currencySibling, "SGD");
-  assert.equal(semantics.currencyHidden, "true");
+  assert.deepEqual(semantics.itemColumns, ["Qty", "Item", "Unit price (SGD)", ""]);
+  assert.equal(semantics.detachedCurrencyLabels, 0);
   assert.equal(semantics.addHelp, "itemLimitHelp");
   assert.match(semantics.addHelpText, /up to 5 items/i);
   assert.equal(semantics.totalAtomic, "true");
@@ -185,13 +217,13 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
   const filenameBehavior = JSON.parse(await evaluate(page, `(() => {
     const number = document.querySelector('#invoiceNumber');
     const filename = document.querySelector('#pdfFileName');
-    number.value = 'INV-SYNC-1'; number.dispatchEvent(new Event('input', { bubbles: true }));
+    number.value = 'inv-sync-1'; number.dispatchEvent(new Event('input', { bubbles: true }));
     const synced = filename.value;
     filename.value = 'Client custom'; filename.dispatchEvent(new Event('input', { bubbles: true }));
-    number.value = 'INV-SYNC-2'; number.dispatchEvent(new Event('input', { bubbles: true }));
-    return JSON.stringify({ synced, customized: filename.value });
+    number.value = 'inv-sync-2'; number.dispatchEvent(new Event('input', { bubbles: true }));
+    return JSON.stringify({ number: number.value, synced, customized: filename.value, autocapitalize: number.autocapitalize, spellcheck: number.spellcheck });
   })()`));
-  assert.deepEqual(filenameBehavior, { synced: "INV-SYNC-1", customized: "Client custom" });
+  assert.deepEqual(filenameBehavior, { number: "INV-SYNC-2", synced: "INV-SYNC-1", customized: "Client custom", autocapitalize: "characters", spellcheck: false });
 
   for (const width of [320, 375, 390, 700, 701, 1024, 1080, 1081, 1200, 1201, 1280, 1440]) {
     await page.send("Emulation.setDeviceMetricsOverride", { width, height: 900, deviceScaleFactor: 1, mobile: width < 500 });
@@ -205,6 +237,8 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
       editorWidth: document.querySelector('.editor-panel').getBoundingClientRect().width,
       headingDirection: getComputedStyle(document.querySelector('.panel-heading')).flexDirection,
       headingGap: parseFloat(getComputedStyle(document.querySelector('.panel-heading')).rowGap),
+      previewJumpVisible: getComputedStyle(document.querySelector('#mobileViewPreviewButton')).display !== 'none',
+      mobileActionsVisible: getComputedStyle(document.querySelector('.mobile-output-action')).display !== 'none',
       mobileLabels: [...document.querySelectorAll('.mobile-field-label')].map(label => ({
         text: label.textContent,
         visible: getComputedStyle(label).display !== 'none',
@@ -212,8 +246,9 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
       })),
       mobileItemGeometry: (() => {
         const fields = [...document.querySelectorAll('.item-row .mobile-field')].map(field => field.getBoundingClientRect());
-        const remove = document.querySelector('.remove-item').getBoundingClientRect();
-        return { quantityTop: fields[0].top, descriptionTop: fields[1].top, priceTop: fields[2].top, removeTop: remove.top };
+        const removeButton = document.querySelector('.remove-item');
+        const remove = removeButton.getBoundingClientRect();
+        return { quantityTop: fields[0].top, descriptionTop: fields[1].top, priceTop: fields[2].top, removeTop: remove.top, removeVisible: removeButton.getClientRects().length > 0 };
       })(),
       columnLabelGeometry: (() => {
         const labels = document.querySelector('.item-column-labels');
@@ -233,9 +268,11 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
     })`);
     const measured = JSON.parse(layout);
     assert.ok(measured.documentWidth <= measured.viewport, `${width}px layout must not overflow`);
-    assert.ok(measured.button.left >= 0 && measured.button.right <= measured.viewport && measured.button.width <= 44.1);
+    if (measured.button.width > 0) assert.ok(measured.button.left >= 0 && measured.button.right <= measured.viewport && measured.button.width <= 44.1);
     assert.equal(measured.label, "Remove item 1");
     assert.equal(measured.workspaceColumns, width <= 1200 ? 1 : 2, `${width}px workspace column count`);
+    assert.equal(measured.previewJumpVisible, width <= 1200, `${width}px preview jump visibility`);
+    assert.equal(measured.mobileActionsVisible, width <= 767, `${width}px mobile output visibility`);
     if (width <= 1200) {
       assert.ok(measured.editorWidth <= 720.1, `${width}px editor should remain constrained`);
       assert.equal(measured.headingDirection, "column", `${width}px save status should group with heading`);
@@ -244,13 +281,13 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
       assert.ok(measured.editorWidth >= 460, `${width}px split editor should remain usable`);
     }
     assert.equal(measured.itemInside, true, `${width}px item row must remain inside its section`);
-    assert.deepEqual(measured.mobileLabels.map((label) => label.text), ["Quantity", "Item", "Price"]);
+    assert.deepEqual(measured.mobileLabels.map((label) => label.text), ["Quantity", "Item 1", "Unit price (SGD)"]);
     assert.ok(measured.mobileLabels.every((label) => label.target));
     assert.ok(measured.mobileLabels.every((label) => label.visible === (width <= 700)));
     if (width <= 700) {
       assert.ok(Math.abs(measured.mobileItemGeometry.quantityTop - measured.mobileItemGeometry.priceTop) < 1);
       assert.ok(measured.mobileItemGeometry.descriptionTop > measured.mobileItemGeometry.quantityTop);
-      assert.ok(measured.mobileItemGeometry.removeTop > measured.mobileItemGeometry.descriptionTop);
+      assert.equal(measured.mobileItemGeometry.removeVisible, false);
     } else {
       assert.ok(measured.columnLabelGeometry.width > 0, `${width}px item column labels need usable width`);
       assert.ok(measured.columnLabelGeometry.left >= measured.columnLabelGeometry.sectionLeft - 1);
@@ -260,6 +297,23 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
       });
     }
   }
+
+  await page.send("Emulation.setDeviceMetricsOverride", { width: 701, height: 900, deviceScaleFactor: 1, mobile: false });
+  const narrowHeader = JSON.parse(await evaluate(page, `(() => {
+    const install = document.querySelector('#installButton');
+    install.hidden = false;
+    const header = document.querySelector('.app-header');
+    const result = {
+      fits: header.scrollWidth <= header.clientWidth,
+      height: header.getBoundingClientRect().height,
+      subtitleVisible: document.querySelector('.brand-subtitle').getClientRects().length > 0,
+      desktopSaveVisible: document.querySelector('#printButton').getClientRects().length > 0,
+      mobileSaveVisible: document.querySelector('#mobilePrintButton').getClientRects().length > 0
+    };
+    install.hidden = true;
+    return JSON.stringify(result);
+  })()`));
+  assert.deepEqual(narrowHeader, { fits: true, height: 72, subtitleVisible: false, desktopSaveVisible: false, mobileSaveVisible: true });
 
   await page.send("Emulation.setDeviceMetricsOverride", { width: 320, height: 640, deviceScaleFactor: 1, mobile: true });
   const previewClickStart = JSON.parse(await evaluate(page, `(() => {
@@ -288,6 +342,32 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
   assert.ok(Math.abs(previewNavigation.scrollY - previewClickStart.scrollY) > 1);
   assert.equal(previewNavigation.outlineWidth, "3px");
   assert.equal(previewNavigation.scrollMarginTop, "72px");
+
+  const previewInspection = JSON.parse(await evaluate(page, `(() => {
+    const actual = document.querySelector('#actualSizePreviewButton');
+    actual.click();
+    const actualState = {
+      transform: document.querySelector('#invoiceSheet').style.transform,
+      pressed: actual.getAttribute('aria-pressed'),
+      overflows: document.querySelector('#previewStage').scrollWidth > document.querySelector('#previewStage').clientWidth,
+      documentWidth: document.documentElement.scrollWidth,
+      viewport: innerWidth
+    };
+    document.querySelector('#fitPreviewButton').click();
+    const fitState = {
+      transform: document.querySelector('#invoiceSheet').style.transform,
+      pressed: document.querySelector('#fitPreviewButton').getAttribute('aria-pressed')
+    };
+    document.querySelector('#backToEditorButton').click();
+    return JSON.stringify({ actualState, fitState, focused: document.activeElement.id });
+  })()`));
+  assert.equal(previewInspection.actualState.transform, "scale(1)");
+  assert.equal(previewInspection.actualState.pressed, "true");
+  assert.equal(previewInspection.actualState.overflows, true);
+  assert.ok(previewInspection.actualState.documentWidth <= previewInspection.actualState.viewport);
+  assert.notEqual(previewInspection.fitState.transform, "scale(1)");
+  assert.equal(previewInspection.fitState.pressed, "true");
+  assert.equal(previewInspection.focused, "editorTitle");
   await page.send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
 
   await evaluate(page, `(() => {
@@ -320,6 +400,27 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
   })()`);
   assert.equal(blankArrowQuantity, "1");
 
+  const blankQuantityRerender = JSON.parse(await evaluate(page, `(() => {
+    const quantity = document.querySelector('[data-item-field="quantity"]');
+    quantity.value = '';
+    quantity.dispatchEvent(new Event('input', { bubbles: true }));
+    document.querySelector('#addItemButton').click();
+    document.querySelectorAll('.remove-item')[document.querySelectorAll('.remove-item').length - 1].click();
+    const rerendered = document.querySelector('[data-item-field="quantity"]');
+    document.querySelector('#printButton').click();
+    const result = {
+      value: rerendered.value,
+      valid: rerendered.validity.valid,
+      invalid: rerendered.getAttribute('aria-invalid'),
+      total: document.querySelector('#editorTotal').textContent,
+      dialogOpen: document.querySelector('#outputDialog').open
+    };
+    rerendered.value = '1';
+    rerendered.dispatchEvent(new Event('input', { bubbles: true }));
+    return JSON.stringify(result);
+  })()`));
+  assert.deepEqual(blankQuantityRerender, { value: "", valid: false, invalid: "true", total: "$0.00", dialogOpen: false });
+
   const longDescriptionFits = await evaluate(page, `(() => {
     const description = document.querySelector('[data-item-field="description"]');
     description.value = 'X'.repeat(500);
@@ -351,6 +452,24 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
   assert.equal(multilineDescription.whiteSpace, "pre-wrap");
   assert.ok(multilineDescription.height > 20, "two-line preview should be taller than one line");
 
+  await page.send("Emulation.setDeviceMetricsOverride", { width: 390, height: 760, deviceScaleFactor: 1, mobile: true });
+  const touchBoldFormatting = JSON.parse(await evaluate(page, `(() => {
+    const description = document.querySelector('[data-item-field="description"]');
+    description.value = 'Touch selected text';
+    description.dispatchEvent(new Event('input', { bubbles: true }));
+    description.setSelectionRange(6, 14);
+    document.querySelector('.item-format-button').click();
+    return JSON.stringify({
+      value: description.value,
+      boldText: document.querySelector('#previewItems td:nth-child(2) strong')?.textContent,
+      buttonVisible: document.querySelector('.item-format-button').getClientRects().length > 0,
+      desktopHelpVisible: document.querySelector('.desktop-formatting-help').getClientRects().length > 0,
+      mobileHelpVisible: document.querySelector('.mobile-formatting-help').getClientRects().length > 0
+    });
+  })()`));
+  assert.deepEqual(touchBoldFormatting, { value: "Touch **selected** text", boldText: "selected", buttonVisible: true, desktopHelpVisible: false, mobileHelpVisible: true });
+  await page.send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
+
   await evaluate(page, `(() => {
     const billTo = document.querySelector('#billTo');
     const quantity = document.querySelector('[data-item-field="quantity"]');
@@ -367,6 +486,7 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
   await new Promise((resolve) => setTimeout(resolve, 300));
   await evaluate(page, "location.reload(); true");
   await waitFor(() => evaluate(page, "document.readyState === 'complete' && document.querySelectorAll('.item-row').length === 4"));
+  await evaluate(page, "document.querySelector('#continueDraftButton').click(); true");
   assert.equal(await evaluate(page, "document.querySelector('#editorTotal').textContent"), "$31.50");
   const persistedCustomFilename = JSON.parse(await evaluate(page, `(() => {
     const filename = document.querySelector('#pdfFileName');
@@ -383,6 +503,7 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
     location.reload();
   })()`);
   await waitFor(() => evaluate(page, "document.readyState === 'complete' && document.querySelector('#pdfFileName').value === document.querySelector('#invoiceNumber').value"));
+  await evaluate(page, "document.querySelector('#continueDraftButton').click(); true");
   const clearedFilenameBehavior = JSON.parse(await evaluate(page, `(() => {
     const number = document.querySelector('#invoiceNumber');
     const filename = document.querySelector('#pdfFileName');
@@ -400,6 +521,20 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
   assert.match(await evaluate(page, "document.querySelector('#invoiceNumber').value"), /^EHR-\d{8}-\d{3,}$/);
   await evaluate(page, "window.dispatchEvent(new PageTransitionEvent('pagehide'))");
   assert.equal(await evaluate(page, "localStorage.getItem('invoice-studio-draft-v1')"), null);
+
+  const metadataOnlyProtection = JSON.parse(await evaluate(page, `(() => {
+    const number = document.querySelector('#invoiceNumber');
+    number.value = 'metadata-only';
+    number.dispatchEvent(new Event('input', { bubbles: true }));
+    let confirmations = 0;
+    window.confirm = () => { confirmations += 1; return false; };
+    document.querySelector('#newInvoiceButton').click();
+    const result = { confirmations, number: number.value };
+    window.confirm = () => true;
+    document.querySelector('#newInvoiceButton').click();
+    return JSON.stringify(result);
+  })()`));
+  assert.deepEqual(metadataOnlyProtection, { confirmations: 1, number: "METADATA-ONLY" });
 
   const newInvoiceProtection = JSON.parse(await evaluate(page, `(() => {
     const billTo = document.querySelector('#billTo');
@@ -473,7 +608,7 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
     document.querySelector('#printButton').click();
     return JSON.stringify({ prints: window.__prints, total: document.querySelector('#editorTotal').textContent, invalid: price.getAttribute('aria-invalid') });
   })()`));
-  assert.deepEqual(overflowBlocked, { prints: 0, total: "$—", invalid: "true" });
+  assert.deepEqual(overflowBlocked, { prints: 0, total: "$-", invalid: "true" });
 
   const printCount = await evaluate(page, `(() => {
     window.__prints = 0; window.__printedTitle = ''; window.print = () => { window.__prints += 1; window.__printedTitle = document.title; };
@@ -496,6 +631,8 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
     document.querySelector('#printButton').click();
     const dialog = {
       open: document.querySelector('#outputDialog').open,
+      title: document.querySelector('#outputDialogTitle').textContent,
+      closeLabel: document.querySelector('#cancelOutputDialogButton').textContent,
       fileName: document.querySelector('#outputFileName').textContent,
       printsBeforeChoice: window.__prints
     };
@@ -507,7 +644,7 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
     clearedInvoiceDate: { invalid: false, errorExists: false, describedBy: null },
     clearedDueDate: { invalid: false, errorExists: false, describedBy: null },
     recovered: { invalid: false, errorExists: false },
-    dialog: { open: true, fileName: "August - Brew Invoice.pdf", printsBeforeChoice: 0 },
+    dialog: { open: true, title: "Invoice saved", closeLabel: "Done", fileName: "August - Brew Invoice.pdf", printsBeforeChoice: 0 },
     prints: 1,
     printedTitle: "August - Brew Invoice.pdf",
     focused: "printButton",
@@ -604,12 +741,128 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
     toast: "August - Brew Invoice.pdf saved.",
   });
 
-  const cacheReady = await waitFor(() => evaluate(page, "caches.keys().then(keys => keys.includes('invoice-studio-v19'))"));
+  const historyBehavior = JSON.parse(await evaluate(page, `(() => {
+    document.querySelector('#invoiceListButton').click();
+    const initial = {
+      page: document.body.dataset.page,
+      count: document.querySelectorAll('.invoice-record').length,
+      number: document.querySelector('.invoice-number')?.textContent,
+      customer: document.querySelector('.invoice-customer')?.textContent,
+      total: document.querySelector('.invoice-record-meta div:last-child dd')?.textContent,
+      semanticLabel: document.querySelector('.invoice-record')?.getAttribute('aria-labelledby'),
+      titleTag: document.querySelector('.invoice-number')?.tagName,
+      createActions: ['newInvoiceButton', 'historyNewInvoiceButton', 'emptyStateNewInvoiceButton']
+        .filter(id => document.getElementById(id).getClientRects().length > 0).length
+    };
+
+    document.querySelector('[data-edit-invoice]').click();
+    const editedCustomer = document.querySelector('#billTo');
+    editedCustomer.value = 'Updated Customer';
+    editedCustomer.dispatchEvent(new Event('input', { bubbles: true }));
+    document.querySelector('#printButton').click();
+    document.querySelector('#cancelOutputDialogButton').click();
+    document.querySelector('#invoiceListButton').click();
+    const afterEdit = {
+      count: document.querySelectorAll('.invoice-record').length,
+      customer: document.querySelector('.invoice-customer')?.textContent
+    };
+
+    const sourceNumber = document.querySelector('.invoice-number').textContent;
+    document.querySelector('[data-duplicate-invoice]').click();
+    const duplicate = {
+      number: document.querySelector('#invoiceNumber').value,
+      customer: document.querySelector('#billTo').value,
+      title: document.querySelector('#editorTitle').textContent
+    };
+    document.querySelector('#printButton').click();
+    document.querySelector('#cancelOutputDialogButton').click();
+    document.querySelector('#invoiceListButton').click();
+    const afterDuplicate = {
+      count: document.querySelectorAll('.invoice-record').length,
+      numbers: [...document.querySelectorAll('.invoice-number')].map(element => element.textContent)
+    };
+    return JSON.stringify({ initial, afterEdit, sourceNumber, duplicate, afterDuplicate });
+  })()`));
+  assert.equal(historyBehavior.initial.page, "history");
+  assert.equal(historyBehavior.initial.count, 1);
+  assert.equal(historyBehavior.initial.number, "INV-1");
+  assert.equal(historyBehavior.initial.customer, "Customer");
+  assert.equal(historyBehavior.initial.total, "$50.00");
+  assert.equal(historyBehavior.initial.titleTag, "H3");
+  assert.ok(historyBehavior.initial.semanticLabel);
+  assert.equal(historyBehavior.initial.createActions, 1);
+  assert.deepEqual(historyBehavior.afterEdit, { count: 1, customer: "Updated Customer" });
+  assert.notEqual(historyBehavior.duplicate.number, historyBehavior.sourceNumber);
+  assert.equal(historyBehavior.duplicate.customer, "Updated Customer");
+  assert.equal(historyBehavior.duplicate.title, "Review duplicated invoice");
+  assert.equal(historyBehavior.afterDuplicate.count, 2);
+  assert.ok(historyBehavior.afterDuplicate.numbers.includes(historyBehavior.sourceNumber));
+  assert.ok(historyBehavior.afterDuplicate.numbers.includes(historyBehavior.duplicate.number));
+
+  const deleteDraftBehavior = JSON.parse(await evaluate(page, `(() => {
+    const savedCount = document.querySelectorAll('.invoice-record').length;
+    document.querySelector('[data-edit-invoice]').click();
+    const customer = document.querySelector('#billTo');
+    customer.value = 'Unsaved customer change';
+    customer.dispatchEvent(new Event('input', { bubbles: true }));
+    document.querySelector('#invoiceListButton').click();
+    const noticeBefore = !document.querySelector('#draftNotice').hidden;
+    const actionsAdjacent = document.querySelector('#continueDraftButton').parentElement === document.querySelector('#deleteDraftButton').parentElement;
+    let confirmations = 0;
+    window.confirm = () => { confirmations += 1; return false; };
+    document.querySelector('#deleteDraftButton').click();
+    const afterCancel = {
+      noticeVisible: !document.querySelector('#draftNotice').hidden,
+      draftStored: localStorage.getItem('invoice-studio-draft-v1') !== null
+    };
+    window.confirm = () => { confirmations += 1; return true; };
+    document.querySelector('#deleteDraftButton').click();
+    return JSON.stringify({
+      savedCount,
+      noticeBefore,
+      actionsAdjacent,
+      confirmations,
+      afterCancel,
+      noticeAfter: !document.querySelector('#draftNotice').hidden,
+      draftStoredAfter: localStorage.getItem('invoice-studio-draft-v1') !== null,
+      historyCountAfter: document.querySelectorAll('.invoice-record').length,
+      toast: document.querySelector('#toast').textContent
+    });
+  })()`));
+  assert.deepEqual(deleteDraftBehavior, {
+    savedCount: 2,
+    noticeBefore: true,
+    actionsAdjacent: true,
+    confirmations: 2,
+    afterCancel: { noticeVisible: true, draftStored: true },
+    noticeAfter: false,
+    draftStoredAfter: false,
+    historyCountAfter: 2,
+    toast: "Unsaved draft deleted."
+  });
+
+  await page.send("Emulation.setDeviceMetricsOverride", { width: 320, height: 760, deviceScaleFactor: 1, mobile: true });
+  const mobileHistoryLayout = JSON.parse(await evaluate(page, `JSON.stringify({
+    viewport: innerWidth,
+    documentWidth: document.documentElement.scrollWidth,
+    datesFit: [...document.querySelectorAll('.invoice-record-meta div:first-child dd')].every(date => date.scrollWidth <= date.clientWidth),
+    records: [...document.querySelectorAll('.invoice-record')].map(record => {
+      const rect = record.getBoundingClientRect();
+      return { left: rect.left, right: rect.right, actionWidths: [...record.querySelectorAll('.button')].map(button => button.getBoundingClientRect().width) };
+    })
+  })`));
+  assert.ok(mobileHistoryLayout.documentWidth <= mobileHistoryLayout.viewport);
+  assert.equal(mobileHistoryLayout.datesFit, true);
+  assert.ok(mobileHistoryLayout.records.every(record => record.left >= 0 && record.right <= mobileHistoryLayout.viewport));
+  assert.ok(mobileHistoryLayout.records.every(record => record.actionWidths.every(width => width >= 44)));
+  await page.send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
+
+  const cacheReady = await waitFor(() => evaluate(page, "caches.keys().then(keys => keys.includes('invoice-studio-v24'))"));
   assert.equal(cacheReady, true);
   const workerSource = await readFile(join(ROOT, "sw.js"), "utf8");
   const handlers = {};
   const deletedCaches = [];
-  const cacheKeys = ["invoice-studio-v1", "invoice-studio-v19", "unrelated-app-cache"];
+  const cacheKeys = ["invoice-studio-v1", "invoice-studio-v24", "unrelated-app-cache"];
   const workerContext = {
     URL,
     Response,
