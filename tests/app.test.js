@@ -103,69 +103,7 @@ async function findChromePath() {
   return undefined;
 }
 
-test("temporary guest mode opens the local workspace without showing login", async (context) => {
-  const chromePath = await findChromePath();
-  if (!chromePath) return context.skip("Set CHROME_PATH to run browser coverage");
-
-  const server = await startServer();
-  const address = server.address();
-  const appUrl = `http://127.0.0.1:${address.port}/`;
-  const profile = await mkdtemp(join(tmpdir(), "invoice-studio-guest-test-"));
-  const chrome = spawn(chromePath, [
-    "--headless=new",
-    "--remote-debugging-port=0",
-    `--user-data-dir=${profile}`,
-    "--no-first-run",
-    "--disable-gpu",
-    appUrl,
-  ], { stdio: ["ignore", "ignore", "pipe"] });
-
-  context.after(async () => {
-    chrome.kill();
-    server.close();
-    await Promise.race([
-      new Promise((resolve) => chrome.once("exit", resolve)),
-      new Promise((resolve) => setTimeout(resolve, 1500)),
-    ]);
-    await rm(profile, { recursive: true, force: true, maxRetries: 8, retryDelay: 150 });
-  });
-
-  let debugOutput = "";
-  chrome.stderr.setEncoding("utf8");
-  chrome.stderr.on("data", (chunk) => { debugOutput += chunk; });
-  const browserSocket = await waitFor(() => debugOutput.match(/DevTools listening on (ws:\/\/[^\s]+)/)?.[1]);
-  const browser = await connectCdp(browserSocket);
-  context.after(() => browser.close());
-  const response = await fetch(`http://127.0.0.1:${new URL(browserSocket).port}/json/list`);
-  const pages = await response.json();
-  const pageTarget = await waitFor(() => pages.find((candidate) => candidate.type === "page" && candidate.url === appUrl));
-  const page = await connectCdp(pageTarget.webSocketDebuggerUrl);
-  context.after(() => page.close());
-  await page.send("Runtime.enable");
-  await page.send("Page.enable");
-  await waitFor(() => evaluate(page, "document.readyState === 'complete' && document.body.dataset.page === 'history'"));
-
-  const state = JSON.parse(await evaluate(page, `JSON.stringify({
-    guestMode: window.invoiceBackend.guestMode,
-    authHidden: document.querySelector('#authPage').hidden,
-    historyVisible: !document.querySelector('#invoiceListPage').hidden,
-    accountLabel: document.querySelector('#accountEmail').textContent,
-    signOutHidden: document.querySelector('#signOutButton').hidden,
-    syncStatus: document.querySelector('#syncStatus').textContent,
-    storageNote: document.querySelector('.history-storage-note').textContent
-  })`));
-  assert.deepEqual(state, {
-    guestMode: true,
-    authHidden: true,
-    historyVisible: true,
-    accountLabel: "Local guest",
-    signOutHidden: true,
-    syncStatus: "Saved on this device",
-    storageNote: "Temporary guest mode: invoices and drafts stay in this browser and are not synced to another device.",
-  });
-});
-
-test("invoice editor behavior, responsive layout, draft, print, and offline shell", async (context) => {
+test("guest entry, invoice editor, responsive layout, draft, print, and offline shell", async (context) => {
   const chromePath = await findChromePath();
   if (!chromePath) return context.skip("Set CHROME_PATH to run browser coverage");
 
@@ -195,7 +133,10 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
   let debugOutput = "";
   chrome.stderr.setEncoding("utf8");
   chrome.stderr.on("data", (chunk) => { debugOutput += chunk; });
-  const browserSocket = await waitFor(() => debugOutput.match(/DevTools listening on (ws:\/\/[^\s]+)/)?.[1]);
+  const browserSocket = await waitFor(
+    () => debugOutput.match(/DevTools listening on (ws:\/\/[^\s]+)/)?.[1],
+    15000,
+  );
   const browser = await connectCdp(browserSocket);
   context.after(() => browser.close());
 
@@ -207,6 +148,26 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
   context.after(() => page.close());
   await page.send("Runtime.enable");
   await page.send("Page.enable");
+  await waitFor(() => evaluate(page, "document.readyState === 'complete' && document.body.dataset.page === 'history'"), 8000);
+  const guestState = JSON.parse(await evaluate(page, `JSON.stringify({
+    guestMode: window.invoiceBackend.guestMode,
+    authHidden: document.querySelector('#authPage').hidden,
+    historyVisible: !document.querySelector('#invoiceListPage').hidden,
+    accountLabel: document.querySelector('#accountEmail').textContent,
+    signOutHidden: document.querySelector('#signOutButton').hidden,
+    syncStatus: document.querySelector('#syncStatus').textContent,
+    storageNote: document.querySelector('.history-storage-note').textContent
+  })`));
+  assert.deepEqual(guestState, {
+    guestMode: true,
+    authHidden: true,
+    historyVisible: true,
+    accountLabel: "Local guest",
+    signOutHidden: true,
+    syncStatus: "Saved on this device",
+    storageNote: "Temporary guest mode: invoices and drafts stay in this browser and are not synced to another device.",
+  });
+
   const backendMock = await readFile(join(ROOT, "tests", "browser-backend-mock.js"), "utf8");
   await page.send("Page.addScriptToEvaluateOnNewDocument", { source: backendMock });
   await evaluate(page, "localStorage.clear(); true");
