@@ -151,10 +151,11 @@ select set_config('request.jwt.claim.sub', '', true);
 select set_config('request.jwt.claim.role', 'anon', true);
 set local role anon;
 
-select is(
-  (select count(*) from public.invoices),
-  0::bigint,
-  'anonymous users cannot read invoices'
+select throws_ok(
+  $sql$select count(*) from public.invoices$sql$,
+  '42501',
+  null,
+  'anonymous users are denied invoice table access'
 );
 select throws_ok(
   $sql$select public.next_invoice_number(date '2026-08-19')$sql$,
