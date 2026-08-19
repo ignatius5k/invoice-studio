@@ -141,10 +141,14 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
   const page = await connectCdp(pages.find((candidate) => candidate.id === target.targetId).webSocketDebuggerUrl);
   context.after(() => page.close());
   await page.send("Runtime.enable");
-  await waitFor(() => evaluate(page, "document.readyState === 'complete' && document.querySelectorAll('.item-row').length === 1"));
+  await page.send("Page.enable");
+  const backendMock = await readFile(join(ROOT, "tests", "browser-backend-mock.js"), "utf8");
+  await page.send("Page.addScriptToEvaluateOnNewDocument", { source: backendMock });
+  await page.send("Page.reload", { ignoreCache: true });
+  await waitFor(() => evaluate(page, "document.readyState === 'complete' && document.body.dataset.page === 'history' && document.querySelectorAll('.item-row').length === 1"));
 
   await evaluate(page, "localStorage.clear(); location.reload(); true");
-  await waitFor(() => evaluate(page, "document.readyState === 'complete' && document.querySelectorAll('.item-row').length === 1"));
+  await waitFor(() => evaluate(page, "document.readyState === 'complete' && document.body.dataset.page === 'history' && document.querySelectorAll('.item-row').length === 1"));
   const landingState = JSON.parse(await evaluate(page, `JSON.stringify({
     page: document.body.dataset.page,
     historyVisible: !document.querySelector('#invoiceListPage').hidden,
@@ -171,9 +175,9 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
   await waitFor(() => evaluate(page, "document.body.dataset.page === 'editor' && !document.querySelector('#editorPage').hidden"));
   const backNavigation = JSON.parse(await evaluate(page, `JSON.stringify({
     label: document.querySelector('#invoiceListButton').textContent,
-    beforeInstall: Boolean(document.querySelector('#invoiceListButton').compareDocumentPosition(document.querySelector('#installButton')) & Node.DOCUMENT_POSITION_FOLLOWING)
+    afterInstall: Boolean(document.querySelector('#installButton').compareDocumentPosition(document.querySelector('#invoiceListButton')) & Node.DOCUMENT_POSITION_FOLLOWING)
   })`));
-  assert.deepEqual(backNavigation, { label: "Back", beforeInstall: true });
+  assert.deepEqual(backNavigation, { label: "Back", afterInstall: true });
   const cleanDraft = await evaluate(page, `JSON.stringify({
     invoiceNumber: document.querySelector('#invoiceNumber').value,
     pdfFileName: document.querySelector('#pdfFileName').value,
@@ -213,6 +217,26 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
   assert.match(semantics.addHelpText, /up to 5 items/i);
   assert.equal(semantics.totalAtomic, "true");
   assert.equal(semantics.placeholders, 0);
+
+  const invoiceAlignment = JSON.parse(await evaluate(page, `(() => {
+    const topSymbol = document.querySelector('#previewItems .amount-symbol').getBoundingClientRect();
+    const totalSymbol = document.querySelector('.invoice-table tfoot td:first-of-type').getBoundingClientRect();
+    const topValue = document.querySelector('#previewItems .amount-value').getBoundingClientRect();
+    const totalValue = document.querySelector('#previewTotal').getBoundingClientRect();
+    const totalLabel = document.querySelector('.invoice-table tfoot th').getBoundingClientRect();
+    const logo = document.querySelector('.invoice-logo').getBoundingClientRect();
+    const table = document.querySelector('.invoice-table').getBoundingClientRect();
+    return JSON.stringify({
+      symbolCenterDifference: Math.abs((topSymbol.left + topSymbol.width / 2) - (totalSymbol.left + totalSymbol.width / 2)),
+      valueRightDifference: Math.abs(topValue.right - totalValue.right),
+      totalLabelGap: totalSymbol.left - totalLabel.right,
+      logoRightDifference: Math.abs(logo.right - table.right)
+    });
+  })()`));
+  assert.ok(invoiceAlignment.symbolCenterDifference < 0.5);
+  assert.ok(invoiceAlignment.valueRightDifference < 0.5);
+  assert.ok(invoiceAlignment.totalLabelGap < 0.5);
+  assert.ok(invoiceAlignment.logoRightDifference < 0.5);
 
   const filenameBehavior = JSON.parse(await evaluate(page, `(() => {
     const number = document.querySelector('#invoiceNumber');
@@ -442,7 +466,7 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
       boldText: preview.querySelector('strong')?.textContent,
       shortcuts: description.getAttribute('aria-keyshortcuts'),
       whiteSpace: getComputedStyle(preview).whiteSpace,
-      height: preview.getBoundingClientRect().height
+      height: preview.scrollHeight
     });
   })()`));
   assert.equal(multilineDescription.editorValue, "First line\n**Second line**");
@@ -513,16 +537,18 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
   })()`));
   assert.deepEqual(clearedFilenameBehavior, { reset: "INV-AFTER-RELOAD", numberBefore: "INV-AFTER-RELOAD", synced: "INV-CLEAR-SYNC" });
 
-  await evaluate(page, `(() => {
+  await evaluate(page, `(async () => {
     window.confirm = () => true;
+    const before = document.querySelector('#invoiceNumber').value;
     document.querySelector('#clearDraftButton').click();
+    while (document.querySelector('#invoiceNumber').value === before) await new Promise(resolve => setTimeout(resolve, 0));
   })()`);
-  assert.equal(await evaluate(page, "localStorage.getItem('invoice-studio-draft-v1')"), null);
+  assert.equal(await evaluate(page, "localStorage.getItem('test-supabase-draft')"), null);
   assert.match(await evaluate(page, "document.querySelector('#invoiceNumber').value"), /^EHR-\d{8}-\d{3,}$/);
   await evaluate(page, "window.dispatchEvent(new PageTransitionEvent('pagehide'))");
-  assert.equal(await evaluate(page, "localStorage.getItem('invoice-studio-draft-v1')"), null);
+  assert.equal(await evaluate(page, "localStorage.getItem('test-supabase-draft')"), null);
 
-  const metadataOnlyProtection = JSON.parse(await evaluate(page, `(() => {
+  const metadataOnlyProtection = JSON.parse(await evaluate(page, `(async () => {
     const number = document.querySelector('#invoiceNumber');
     number.value = 'metadata-only';
     number.dispatchEvent(new Event('input', { bubbles: true }));
@@ -532,11 +558,12 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
     const result = { confirmations, number: number.value };
     window.confirm = () => true;
     document.querySelector('#newInvoiceButton').click();
+    while (number.value === 'METADATA-ONLY') await new Promise(resolve => setTimeout(resolve, 0));
     return JSON.stringify(result);
   })()`));
   assert.deepEqual(metadataOnlyProtection, { confirmations: 1, number: "METADATA-ONLY" });
 
-  const newInvoiceProtection = JSON.parse(await evaluate(page, `(() => {
+  const newInvoiceProtection = JSON.parse(await evaluate(page, `(async () => {
     const billTo = document.querySelector('#billTo');
     billTo.value = 'Keep me'; billTo.dispatchEvent(new Event('input', { bubbles: true }));
     const before = document.querySelector('#invoiceNumber').value;
@@ -545,14 +572,17 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
     const cancelled = { number: document.querySelector('#invoiceNumber').value, billTo: billTo.value };
     window.confirm = () => true;
     document.querySelector('#newInvoiceButton').click();
+    while (document.querySelector('#invoiceNumber').value === before) await new Promise(resolve => setTimeout(resolve, 0));
     return JSON.stringify({ before, cancelled, after: document.querySelector('#invoiceNumber').value, pdfAfter: document.querySelector('#pdfFileName').value, billToAfter: document.querySelector('#billTo').value });
   })()`));
   assert.deepEqual(newInvoiceProtection.cancelled, { number: newInvoiceProtection.before, billTo: "Keep me" });
   assert.notEqual(newInvoiceProtection.after, newInvoiceProtection.before);
   assert.equal(newInvoiceProtection.pdfAfter, newInvoiceProtection.after);
   assert.equal(newInvoiceProtection.billToAfter, "");
-  const followingInvoiceNumber = await evaluate(page, `(() => {
+  const followingInvoiceNumber = await evaluate(page, `(async () => {
+    const before = document.querySelector('#invoiceNumber').value;
     document.querySelector('#newInvoiceButton').click();
+    while (document.querySelector('#invoiceNumber').value === before) await new Promise(resolve => setTimeout(resolve, 0));
     return document.querySelector('#invoiceNumber').value;
   })()`);
   assert.notEqual(followingInvoiceNumber, newInvoiceProtection.after);
@@ -610,7 +640,7 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
   })()`));
   assert.deepEqual(overflowBlocked, { prints: 0, total: "$-", invalid: "true" });
 
-  const printCount = await evaluate(page, `(() => {
+  const printCount = await evaluate(page, `(async () => {
     window.__prints = 0; window.__printedTitle = ''; window.print = () => { window.__prints += 1; window.__printedTitle = document.title; };
     const values = { invoiceNumber: 'INV-1', pdfFileName: 'August / Brew Invoice.pdf', invoiceDate: '2026-08-20', dueDate: '2026-08-13', billTo: 'Customer' };
     for (const [id, value] of Object.entries(values)) { const input = document.querySelector('#' + id); input.value = value; input.dispatchEvent(new Event('input', { bubbles: true })); }
@@ -629,6 +659,7 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
     dueDate.value = '2026-08-27'; dueDate.dispatchEvent(new Event('input', { bubbles: true }));
     const recovered = { invalid: dueDate.hasAttribute('aria-invalid'), errorExists: Boolean(document.querySelector('#error-dueDate')) };
     document.querySelector('#printButton').click();
+    while (!document.querySelector('#outputDialog').open) await new Promise(resolve => setTimeout(resolve, 0));
     const dialog = {
       open: document.querySelector('#outputDialog').open,
       title: document.querySelector('#outputDialogTitle').textContent,
@@ -651,11 +682,13 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
     invalid: 0,
   });
 
-  assert.equal(await evaluate(page, "typeof window.html2pdf"), "function");
+  assert.equal(await evaluate(page, "typeof window.html2pdf"), "undefined");
+  assert.equal(await evaluate(page, "document.querySelector('script[data-pdf-library]') === null"), true);
   await page.send("Emulation.setDeviceMetricsOverride", { width: 320, height: 640, deviceScaleFactor: 1, mobile: true });
-  const mobileDialog = JSON.parse(await evaluate(page, `(() => {
+  const mobileDialog = JSON.parse(await evaluate(page, `(async () => {
     document.querySelector('#mobilePrintButton').click();
     const dialog = document.querySelector('#outputDialog');
+    while (!dialog.open) await new Promise(resolve => setTimeout(resolve, 0));
     const rect = dialog.getBoundingClientRect();
     const optionHeights = [...dialog.querySelectorAll('.output-option')].map(option => option.getBoundingClientRect().height);
     const result = {
@@ -680,9 +713,15 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
   const downloadedPdfPath = join(profile, "August - Brew Invoice.pdf");
   await evaluate(page, `(() => {
     document.querySelector('#printButton').click();
-    document.querySelector('#savePdfButton').click();
     return true;
   })()`);
+  await waitFor(() => evaluate(page, "document.querySelector('#outputDialog').open"));
+  await evaluate(page, "document.querySelector('#savePdfButton').click(); true");
+  await waitFor(() => evaluate(page, "typeof window.html2pdf === 'function'"));
+  assert.equal(
+    await evaluate(page, "document.querySelector('script[data-pdf-library=\"html2pdf\"]')?.getAttribute('src')"),
+    "./vendor/html2pdf.bundle.min.js?v=27",
+  );
   await waitFor(async () => {
     try {
       return (await stat(downloadedPdfPath)).size > 20000;
@@ -710,6 +749,7 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
     };
     window.html2pdf = () => worker;
     document.querySelector('#printButton').click();
+    while (!document.querySelector('#outputDialog').open) await new Promise(resolve => setTimeout(resolve, 0));
     const openBeforeSave = document.querySelector('#outputDialog').open;
     document.querySelector('#savePdfButton').click();
     await new Promise(resolve => setTimeout(resolve, 0));
@@ -741,7 +781,7 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
     toast: "August - Brew Invoice.pdf saved.",
   });
 
-  const historyBehavior = JSON.parse(await evaluate(page, `(() => {
+  const historyBehavior = JSON.parse(await evaluate(page, `(async () => {
     document.querySelector('#invoiceListButton').click();
     const initial = {
       page: document.body.dataset.page,
@@ -760,6 +800,7 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
     editedCustomer.value = 'Updated Customer';
     editedCustomer.dispatchEvent(new Event('input', { bubbles: true }));
     document.querySelector('#printButton').click();
+    while (!document.querySelector('#outputDialog').open) await new Promise(resolve => setTimeout(resolve, 0));
     document.querySelector('#cancelOutputDialogButton').click();
     document.querySelector('#invoiceListButton').click();
     const afterEdit = {
@@ -769,12 +810,14 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
 
     const sourceNumber = document.querySelector('.invoice-number').textContent;
     document.querySelector('[data-duplicate-invoice]').click();
+    while (document.querySelector('#editorTitle').textContent !== 'Review duplicated invoice') await new Promise(resolve => setTimeout(resolve, 0));
     const duplicate = {
       number: document.querySelector('#invoiceNumber').value,
       customer: document.querySelector('#billTo').value,
       title: document.querySelector('#editorTitle').textContent
     };
     document.querySelector('#printButton').click();
+    while (!document.querySelector('#outputDialog').open) await new Promise(resolve => setTimeout(resolve, 0));
     document.querySelector('#cancelOutputDialogButton').click();
     document.querySelector('#invoiceListButton').click();
     const afterDuplicate = {
@@ -799,13 +842,14 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
   assert.ok(historyBehavior.afterDuplicate.numbers.includes(historyBehavior.sourceNumber));
   assert.ok(historyBehavior.afterDuplicate.numbers.includes(historyBehavior.duplicate.number));
 
-  const deleteDraftBehavior = JSON.parse(await evaluate(page, `(() => {
+  const deleteDraftBehavior = JSON.parse(await evaluate(page, `(async () => {
     const savedCount = document.querySelectorAll('.invoice-record').length;
     document.querySelector('[data-edit-invoice]').click();
     const customer = document.querySelector('#billTo');
     customer.value = 'Unsaved customer change';
     customer.dispatchEvent(new Event('input', { bubbles: true }));
     document.querySelector('#invoiceListButton').click();
+    while (localStorage.getItem('test-supabase-draft') === null) await new Promise(resolve => setTimeout(resolve, 0));
     const noticeBefore = !document.querySelector('#draftNotice').hidden;
     const actionsAdjacent = document.querySelector('#continueDraftButton').parentElement === document.querySelector('#deleteDraftButton').parentElement;
     let confirmations = 0;
@@ -813,10 +857,11 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
     document.querySelector('#deleteDraftButton').click();
     const afterCancel = {
       noticeVisible: !document.querySelector('#draftNotice').hidden,
-      draftStored: localStorage.getItem('invoice-studio-draft-v1') !== null
+      draftStored: localStorage.getItem('test-supabase-draft') !== null
     };
     window.confirm = () => { confirmations += 1; return true; };
     document.querySelector('#deleteDraftButton').click();
+    while (!document.querySelector('#draftNotice').hidden) await new Promise(resolve => setTimeout(resolve, 0));
     return JSON.stringify({
       savedCount,
       noticeBefore,
@@ -824,7 +869,7 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
       confirmations,
       afterCancel,
       noticeAfter: !document.querySelector('#draftNotice').hidden,
-      draftStoredAfter: localStorage.getItem('invoice-studio-draft-v1') !== null,
+      draftStoredAfter: localStorage.getItem('test-supabase-draft') !== null,
       historyCountAfter: document.querySelectorAll('.invoice-record').length,
       toast: document.querySelector('#toast').textContent
     });
@@ -840,6 +885,52 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
     historyCountAfter: 2,
     toast: "Unsaved draft deleted."
   });
+
+  await evaluate(page, `(() => {
+    localStorage.setItem('test-original-invoices', localStorage.getItem('test-supabase-invoices'));
+    const records = Array.from({ length: 31 }, (_, index) => ({
+      id: 'pagination-' + String(index).padStart(2, '0'),
+      revision: 1,
+      createdAt: new Date(Date.UTC(2026, 6, index + 1)).toISOString(),
+      updatedAt: new Date(Date.UTC(2026, 6, index + 1)).toISOString(),
+      invoice: {
+        invoiceNumber: 'EHR-PAGE-' + String(index + 1).padStart(3, '0'),
+        pdfFileName: 'EHR-PAGE-' + String(index + 1).padStart(3, '0'),
+        invoiceDate: '2026-07-01',
+        dueDate: '2026-07-08',
+        billTo: index === 7 ? 'Needle Customer' : 'Pagination Customer ' + index,
+        items: [{ id: 'item-' + index, quantity: 1, description: 'Market space', price: '25' }]
+      }
+    }));
+    localStorage.setItem('test-supabase-invoices', JSON.stringify(records));
+    location.reload();
+  })()`);
+  await waitFor(() => evaluate(page, "document.body.dataset.page === 'history' && document.querySelectorAll('.invoice-record').length === 25 && !document.querySelector('#loadMoreInvoicesButton').hidden"));
+  await evaluate(page, "document.querySelector('#loadMoreInvoicesButton').click(); true");
+  await waitFor(() => evaluate(page, "document.querySelectorAll('.invoice-record').length === 31 && document.querySelector('#loadMoreInvoicesButton').hidden"));
+  await evaluate(page, `(() => {
+    const search = document.querySelector('#invoiceSearch');
+    search.value = 'Needle Customer';
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+  })()`);
+  await waitFor(() => evaluate(page, "document.querySelectorAll('.invoice-record').length === 1 && document.querySelector('#invoiceCount').textContent === '1 of 1 invoice'"));
+  const paginationBehavior = JSON.parse(await evaluate(page, `JSON.stringify({
+    onlyCustomer: document.querySelector('.invoice-customer').textContent,
+    calls: window.__BROWSER_BACKEND_MOCK__.controls.listCalls,
+    loadingHidden: document.querySelector('#historyLoadingState').hidden,
+    errorHidden: document.querySelector('#historyErrorState').hidden
+  })`));
+  assert.equal(paginationBehavior.onlyCustomer, "Needle Customer");
+  assert.equal(paginationBehavior.loadingHidden, true);
+  assert.equal(paginationBehavior.errorHidden, true);
+  assert.ok(paginationBehavior.calls.some((call) => call.limit === 25 && call.cursor));
+  assert.ok(paginationBehavior.calls.some((call) => call.query === "Needle Customer"));
+  await evaluate(page, `(() => {
+    localStorage.setItem('test-supabase-invoices', localStorage.getItem('test-original-invoices'));
+    localStorage.removeItem('test-original-invoices');
+    location.reload();
+  })()`);
+  await waitFor(() => evaluate(page, "document.body.dataset.page === 'history' && document.querySelectorAll('.invoice-record').length === 2"));
 
   await page.send("Emulation.setDeviceMetricsOverride", { width: 320, height: 760, deviceScaleFactor: 1, mobile: true });
   const mobileHistoryLayout = JSON.parse(await evaluate(page, `JSON.stringify({
@@ -857,12 +948,193 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
   assert.ok(mobileHistoryLayout.records.every(record => record.actionWidths.every(width => width >= 44)));
   await page.send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
 
-  const cacheReady = await waitFor(() => evaluate(page, "caches.keys().then(keys => keys.includes('invoice-studio-v25'))"));
+  const blockedSignOut = JSON.parse(await evaluate(page, `(async () => {
+    const operation = await window.invoiceDraftOutbox.putSave('test-user-1', {
+      invoiceNumber: 'EHR-RECOVERY-001',
+      billTo: 'Recovered customer'
+    });
+    document.querySelector('#signOutButton').click();
+    while (!document.querySelector('#toast').textContent.includes('has not synced')) await new Promise(resolve => setTimeout(resolve, 0));
+    const result = {
+      page: document.body.dataset.page,
+      status: document.querySelector('#syncStatus').textContent,
+      signOutCalls: window.__BROWSER_BACKEND_MOCK__.controls.signOutCalls,
+      pending: await window.invoiceDraftOutbox.has('test-user-1')
+    };
+    await window.invoiceDraftOutbox.remove('test-user-1', operation.operationId);
+    return JSON.stringify(result);
+  })()`));
+  assert.deepEqual(blockedSignOut, {
+    page: "history",
+    status: "Sync this draft before signing out",
+    signOutCalls: 0,
+    pending: true,
+  });
+
+  await evaluate(page, "document.querySelector('#signOutButton').click(); true");
+  await waitFor(() => evaluate(page, "document.body.dataset.page === 'auth' && !document.querySelector('#authPage').hidden"));
+  const signedOutState = JSON.parse(await evaluate(page, `JSON.stringify({
+    title: document.querySelector('#authTitle').textContent,
+    historyHidden: document.querySelector('#invoiceListPage').hidden,
+    accountHidden: document.querySelector('#accountControls').hidden,
+    remoteInvoices: JSON.parse(localStorage.getItem('test-supabase-invoices') || '[]').length,
+    passwordMinimum: document.querySelector('#authPassword').minLength,
+    emailValue: document.querySelector('#authEmail').value,
+    passwordValue: document.querySelector('#authPassword').value,
+    recoveryPasswordValue: document.querySelector('#recoveryPassword').value,
+    recoveryConfirmValue: document.querySelector('#recoveryPasswordConfirm').value,
+    billToValue: document.querySelector('#billTo').value,
+    previewBillTo: document.querySelector('#previewBillTo').textContent,
+    renderedHistoryRecords: document.querySelectorAll('.invoice-record').length
+  })`));
+  assert.deepEqual(signedOutState, {
+    title: "Sign in",
+    historyHidden: true,
+    accountHidden: true,
+    remoteInvoices: 2,
+    passwordMinimum: 6,
+    emailValue: "",
+    passwordValue: "",
+    recoveryPasswordValue: "",
+    recoveryConfirmValue: "",
+    billToValue: "",
+    previewBillTo: "",
+    renderedHistoryRecords: 0,
+  });
+
+  await evaluate(page, `(() => {
+    document.querySelector('#authEmail').value = 'new-owner@example.com';
+    document.querySelector('#authPassword').value = 'secure-pass-123';
+    document.querySelector('#createAccountButton').click();
+  })()`);
+  await waitFor(() => evaluate(page, "document.querySelector('#authMessage').textContent.includes('Check your email')"));
+  await evaluate(page, "document.querySelector('#forgotPasswordButton').click(); true");
+  await waitFor(() => evaluate(page, "document.querySelector('#authMessage').textContent.includes('reset link')"));
+
+  await evaluate(page, `(() => {
+    document.querySelector('#authPassword').value = 'secure-pass-123';
+    document.querySelector('#authForm').requestSubmit();
+  })()`);
+  await waitFor(() => evaluate(page, "document.body.dataset.page === 'history' && document.querySelectorAll('.invoice-record').length === 2"));
+  assert.equal(await evaluate(page, "document.querySelector('#accountEmail').textContent"), "new-owner@example.com");
+
+  await evaluate(page, "window.__BROWSER_BACKEND_MOCK__.emitPasswordRecovery(); true");
+  await waitFor(() => evaluate(page, "!document.querySelector('#passwordRecoveryForm').hidden"));
+  await evaluate(page, `(() => {
+    document.querySelector('#recoveryPassword').value = 'replacement-pass-123';
+    document.querySelector('#recoveryPasswordConfirm').value = 'replacement-pass-123';
+    document.querySelector('#passwordRecoveryForm').requestSubmit();
+  })()`);
+  await waitFor(() => evaluate(page, "document.body.dataset.page === 'history' && document.querySelector('#passwordRecoveryForm').hidden"));
+
+  await evaluate(page, `(() => {
+    const invoice = {
+      draftDirty: false,
+      invoiceNumber: 'EHR-20260819-099',
+      pdfFileName: 'EHR-20260819-099',
+      pdfFileNameCustomized: false,
+      invoiceDate: '2026-08-19',
+      dueDate: '2026-08-26',
+      billTo: 'Migrated Customer',
+      items: [{ id: 'legacy-item', quantity: 1, description: 'Migrated service', price: 88 }]
+    };
+    localStorage.setItem('invoice-studio-history-v1', JSON.stringify([{ id: 'legacy-record', createdAt: '2026-08-19T01:00:00.000Z', updatedAt: '2026-08-19T01:00:00.000Z', invoice }]));
+    localStorage.setItem('invoice-studio-draft-v1', JSON.stringify({ ...invoice, historyId: undefined, draftDirty: true, invoiceNumber: 'EHR-20260819-100', billTo: 'Migrated Draft' }));
+    localStorage.setItem('invoice-studio-sequence-v1', JSON.stringify({ date: '20260819', sequence: 100 }));
+    location.reload();
+  })()`);
+  await waitFor(() => evaluate(page, "document.querySelector('#legacyMigrationDialog').open"));
+  const migrationConsent = JSON.parse(await evaluate(page, `JSON.stringify({
+    summary: document.querySelector('#legacyMigrationSummary').textContent,
+    destination: document.querySelector('#legacyMigrationDestination').textContent,
+    choices: [
+      'moveLegacyDataButton', 'exportLegacyDataButton', 'discardLegacyDataButton', 'cancelLegacyMigrationButton'
+    ].map(id => document.getElementById(id).textContent),
+    legacyStillLocal: localStorage.getItem('invoice-studio-history-v1') !== null
+      && localStorage.getItem('invoice-studio-draft-v1') !== null
+  })`));
+  assert.deepEqual(migrationConsent, {
+    summary: "1 saved invoice and 1 draft",
+    destination: "owner@example.com",
+    choices: ["Move to this account", "Export a backup", "Discard local copy", "Cancel sign-in"],
+    legacyStillLocal: true,
+  });
+  await evaluate(page, "document.querySelector('#exportLegacyDataButton').click(); true");
+  await waitFor(() => evaluate(page, "document.querySelector('#legacyMigrationMessage').textContent.includes('Backup downloaded')"));
+  assert.equal(await evaluate(page, "localStorage.getItem('invoice-studio-history-v1') !== null"), true);
+  await evaluate(page, "document.querySelector('#moveLegacyDataButton').click(); true");
+  await waitFor(() => evaluate(page, "document.body.dataset.page === 'history' && document.querySelectorAll('.invoice-record').length === 3 && !document.querySelector('#draftNotice').hidden"));
+  const migrationState = JSON.parse(await evaluate(page, `JSON.stringify({
+    legacyHistoryRemoved: localStorage.getItem('invoice-studio-history-v1') === null,
+    legacyDraftRemoved: localStorage.getItem('invoice-studio-draft-v1') === null,
+    legacySequenceRemoved: localStorage.getItem('invoice-studio-sequence-v1') === null,
+    remoteCount: JSON.parse(localStorage.getItem('test-supabase-invoices') || '[]').length,
+    draftSummary: document.querySelector('#draftNoticeSummary').textContent,
+    toast: document.querySelector('#toast').textContent
+  })`));
+  assert.deepEqual(migrationState, {
+    legacyHistoryRemoved: true,
+    legacyDraftRemoved: true,
+    legacySequenceRemoved: true,
+    remoteCount: 3,
+    draftSummary: "EHR-20260819-100 for Migrated Draft, $88.00",
+    toast: "Existing browser invoices were moved to your account."
+  });
+
+  const optimisticConflictCodes = JSON.parse(await evaluate(page, `(async () => {
+    const { records } = await window.invoiceBackend.listInvoices('test-user-1');
+    const staleInvoice = records[0];
+    await window.invoiceBackend.saveInvoice('test-user-1', { ...staleInvoice, invoice: { ...staleInvoice.invoice, billTo: 'Other session' } });
+    let invoiceCode = '';
+    try {
+      await window.invoiceBackend.saveInvoice('test-user-1', { ...staleInvoice, invoice: { ...staleInvoice.invoice, billTo: 'Stale session' } });
+    } catch (error) {
+      invoiceCode = error.code;
+    }
+
+    const staleDraft = await window.invoiceBackend.loadDraft('test-user-1');
+    await window.invoiceBackend.saveDraft('test-user-1', staleDraft.invoice, undefined, staleDraft.revision);
+    let draftCode = '';
+    try {
+      await window.invoiceBackend.saveDraft('test-user-1', staleDraft.invoice, undefined, staleDraft.revision);
+    } catch (error) {
+      draftCode = error.code;
+    }
+    return JSON.stringify({ invoiceCode, draftCode });
+  })()`));
+  assert.deepEqual(optimisticConflictCodes, {
+    invoiceCode: "INVOICE_REVISION_CONFLICT",
+    draftCode: "DRAFT_REVISION_CONFLICT",
+  });
+
+  const migrationSql = await readFile(join(ROOT, "supabase/migrations/20260819084659_invoice_studio.sql"), "utf8");
+  assert.match(migrationSql, /alter table public\.invoices enable row level security;/);
+  assert.match(migrationSql, /alter table public\.invoice_drafts enable row level security;/);
+  assert.match(migrationSql, /alter table public\.invoice_revisions enable row level security;/);
+  assert.match(migrationSql, /to authenticated\s+using \(\(select auth\.uid\(\)\) = user_id\);/);
+  assert.match(migrationSql, /revoke all on table public\.invoices from anon, authenticated;/);
+  assert.match(migrationSql, /revoke all on table public\.invoice_counters from anon, authenticated;/);
+  assert.match(migrationSql, /create or replace function public\.next_invoice_number[\s\S]+security definer\s+set search_path = ''/);
+  assert.match(migrationSql, /create or replace function public\.invoice_items_are_valid[\s\S]+octet_length\(p_items::text\) > 16000/);
+  assert.match(migrationSql, /create or replace function public\.invoice_draft_is_valid[\s\S]+octet_length\(p_invoice::text\) > 24000/);
+  assert.match(migrationSql, /revision integer not null default 1/);
+  assert.match(migrationSql, /constraint invoices_user_invoice_number_key unique \(user_id, invoice_number\)/);
+  assert.match(migrationSql, /create table public\.invoice_revisions/);
+  assert.match(migrationSql, /INVOICE_REVISION_CONFLICT/);
+  assert.match(migrationSql, /maximum 2000 invoices per account/);
+  assert.match(migrationSql, /create or replace function public\.list_invoices_page/);
+  assert.match(migrationSql, /list_invoices_page[\s\S]+security invoker\s+set search_path = ''/);
+  assert.match(migrationSql, /grant execute on function public\.list_invoices_page[\s\S]+to authenticated;/);
+  const backendSource = await readFile(join(ROOT, "backend.js"), "utf8");
+  assert.match(backendSource, /\.eq\("revision", expectedRevision\)/);
+  assert.match(backendSource, /error\.code = "INVOICE_REVISION_CONFLICT"/);
+
+  const cacheReady = await waitFor(() => evaluate(page, "caches.keys().then(keys => keys.includes('invoice-studio-v27'))"));
   assert.equal(cacheReady, true);
   const workerSource = await readFile(join(ROOT, "sw.js"), "utf8");
   const handlers = {};
   const deletedCaches = [];
-  const cacheKeys = ["invoice-studio-v1", "invoice-studio-v25", "unrelated-app-cache"];
+  const cacheKeys = ["invoice-studio-v1", "invoice-studio-v27", "unrelated-app-cache"];
   const workerContext = {
     URL,
     Response,
@@ -900,7 +1172,8 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
   await page.send("Page.reload", { ignoreCache: true });
   await waitFor(() => evaluate(page, "document.readyState === 'complete' && document.querySelector('#invoiceForm') !== null"), 8000);
   assert.equal(await evaluate(page, "typeof window.__offlineReloadMarker"), "undefined");
-  assert.equal(await evaluate(page, "typeof window.html2pdf"), "function");
+  assert.equal(await evaluate(page, "typeof window.html2pdf"), "undefined");
+  assert.equal(await evaluate(page, "document.querySelector('script[data-pdf-library]') === null"), true);
   await page.send("Network.emulateNetworkConditions", {
     offline: false,
     latency: 0,

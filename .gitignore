@@ -1,6 +1,7 @@
 .venv/
 tmp/
 node_modules/
+dist/
 .playwright-mcp/
 design-directions/
 .DS_Store

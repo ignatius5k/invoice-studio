@@ -5,6 +5,13 @@ const PAPER_WIDTH = 793.7;
 const PAPER_HEIGHT = 1122.52;
 const MAX_QUANTITY = 9999;
 const MAX_PRICE = 999999999.99;
+const MAX_ITEM_DESCRIPTION_LENGTH = 1000;
+const MAX_BILL_TO_LENGTH = 2000;
+const HISTORY_PAGE_SIZE = 25;
+const DRAFT_RETRY_MAX_DELAY = 30000;
+const PDF_LIBRARY_URL = "./vendor/html2pdf.bundle.min.js?v=27";
+const backend = window.invoiceBackend;
+const draftOutbox = window.invoiceDraftOutbox;
 
 const form = document.querySelector("#invoiceForm");
 const itemsEditor = document.querySelector("#itemsEditor");
@@ -39,11 +46,45 @@ const invoiceCount = document.querySelector("#invoiceCount");
 const invoiceSearch = document.querySelector("#invoiceSearch");
 const invoiceSearchField = document.querySelector("#invoiceSearchField");
 const historyNewInvoiceButton = document.querySelector("#historyNewInvoiceButton");
+const historySection = document.querySelector("#historySection");
+const historyLoadingState = document.querySelector("#historyLoadingState");
+const historyErrorState = document.querySelector("#historyErrorState");
+const retryHistoryButton = document.querySelector("#retryHistoryButton");
+const loadMoreInvoicesButton = document.querySelector("#loadMoreInvoicesButton");
 const draftNotice = document.querySelector("#draftNotice");
 const draftNoticeSummary = document.querySelector("#draftNoticeSummary");
+const authPage = document.querySelector("#authPage");
+const authConfigurationState = document.querySelector("#authConfigurationState");
+const authSignInState = document.querySelector("#authSignInState");
+const authForm = document.querySelector("#authForm");
+const authEmail = document.querySelector("#authEmail");
+const authPassword = document.querySelector("#authPassword");
+const authMessage = document.querySelector("#authMessage");
+const createAccountButton = document.querySelector("#createAccountButton");
+const forgotPasswordButton = document.querySelector("#forgotPasswordButton");
+const passwordRecoveryForm = document.querySelector("#passwordRecoveryForm");
+const recoveryPassword = document.querySelector("#recoveryPassword");
+const recoveryPasswordConfirm = document.querySelector("#recoveryPasswordConfirm");
+const accountControls = document.querySelector("#accountControls");
+const accountEmail = document.querySelector("#accountEmail");
+const syncStatus = document.querySelector("#syncStatus");
+const signOutButton = document.querySelector("#signOutButton");
+const legacyMigrationDialog = document.querySelector("#legacyMigrationDialog");
+const legacyMigrationSummary = document.querySelector("#legacyMigrationSummary");
+const legacyMigrationDestination = document.querySelector("#legacyMigrationDestination");
+const legacyMigrationMessage = document.querySelector("#legacyMigrationMessage");
+const moveLegacyDataButton = document.querySelector("#moveLegacyDataButton");
+const exportLegacyDataButton = document.querySelector("#exportLegacyDataButton");
+const discardLegacyDataButton = document.querySelector("#discardLegacyDataButton");
+const cancelLegacyMigrationButton = document.querySelector("#cancelLegacyMigrationButton");
+const draftConflictDialog = document.querySelector("#draftConflictDialog");
+const localDraftConflictSummary = document.querySelector("#localDraftConflictSummary");
+const cloudDraftConflictSummary = document.querySelector("#cloudDraftConflictSummary");
+const keepLocalDraftButton = document.querySelector("#keepLocalDraftButton");
+const keepCloudDraftButton = document.querySelector("#keepCloudDraftButton");
 
-let state = loadDraft() ?? createInvoiceDraft();
-let invoiceHistory = loadInvoiceHistory();
+let state = createInvoiceDraft();
+let invoiceHistory = [];
 let saveTimer;
 let toastTimer;
 let installPrompt;
@@ -53,31 +94,65 @@ let outputBusy = false;
 let outputDialogTrigger;
 let currentPage = "history";
 let historyQuery = "";
+let historyNextCursor;
+let historyTotal = 0;
+let historyLoading = false;
+let historyLoadError = false;
+let historyRequestVersion = 0;
+let historySearchTimer;
 let previewScaleMode = "fit";
+let currentUser;
+let workspaceLoading = false;
+let draftWriteQueue = Promise.resolve();
+let outboxWriteQueue = Promise.resolve();
+let draftSaveVersion = 0;
+let draftRevision;
+let draftWriteAbortController = new AbortController();
+let sessionEpoch = 0;
+let pendingLegacyMigration;
+let resolveLegacyMigration;
+let draftRetryTimer;
+let draftSyncPromise;
+let draftConflictOperation;
+let draftConflictRemote;
+let resolveDraftConflictChoice;
+let pdfLibraryPromise;
 
 function normalizeInvoiceData(value) {
   if (!value || !Array.isArray(value.items) || value.items.length === 0) return null;
-  const invoiceNumber = String(value.invoiceNumber || "").slice(0, 120);
-  const savedPdfFileName = String(value.pdfFileName || "").trim();
+  const invoiceNumber = String(value.invoiceNumber || "").toLocaleUpperCase("en-SG").slice(0, 120);
+  const savedPdfFileName = String(value.pdfFileName || "").trim().slice(0, 120);
   return {
-    historyId: typeof value.historyId === "string" ? value.historyId : undefined,
+    historyId: typeof value.historyId === "string" ? value.historyId.slice(0, 160) : undefined,
     draftDirty: Boolean(value.draftDirty),
     invoiceNumber,
     pdfFileName: savedPdfFileName || invoiceNumber || "invoice",
     pdfFileNameCustomized: Boolean(savedPdfFileName && savedPdfFileName !== invoiceNumber),
     invoiceDate: String(value.invoiceDate || ""),
     dueDate: String(value.dueDate || ""),
-    billTo: String(value.billTo || ""),
+    billTo: String(value.billTo || "").slice(0, MAX_BILL_TO_LENGTH),
     items: value.items.slice(0, 5).map((item, index) => ({
-      id: String(item?.id || `item-${Date.now()}-${index}`),
-      quantity: normalizeQuantity(item?.quantity),
-      description: String(item?.description || ""),
-      price: Number(item?.price) === 0 && !String(item?.description || "").trim() ? "" : item?.price ?? "",
+      id: String(item?.id || `item-${Date.now()}-${index}`).slice(0, 160),
+      quantity: normalizeDraftQuantity(item?.quantity),
+      description: String(item?.description || "").slice(0, MAX_ITEM_DESCRIPTION_LENGTH),
+      price: normalizeDraftPrice(item?.price),
     })),
   };
 }
 
-function loadDraft() {
+function normalizeDraftQuantity(value) {
+  if (value === "" || value === null || value === undefined) return "";
+  const quantity = Number(value);
+  return Number.isFinite(quantity) ? quantity : "";
+}
+
+function normalizeDraftPrice(value) {
+  if (value === "" || value === null || value === undefined) return "";
+  const price = Number(value);
+  return Number.isFinite(price) ? price : "";
+}
+
+function loadLegacyDraft() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
@@ -87,7 +162,7 @@ function loadDraft() {
   }
 }
 
-function loadInvoiceHistory() {
+function loadLegacyInvoiceHistory() {
   try {
     const parsed = JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]");
     if (!Array.isArray(parsed)) return [];
@@ -113,17 +188,719 @@ function loadInvoiceHistory() {
   }
 }
 
+function setAuthMessage(message = "", stateName = "") {
+  authMessage.textContent = message;
+  if (stateName) authMessage.dataset.state = stateName;
+  else authMessage.removeAttribute("data-state");
+}
+
+function setAuthBusy(isBusy) {
+  for (const button of authPage.querySelectorAll("button")) button.disabled = isBusy;
+  authPage.setAttribute("aria-busy", String(isBusy));
+}
+
+function neutralizeDraftWrites() {
+  clearTimeout(saveTimer);
+  clearTimeout(draftRetryTimer);
+  draftSaveVersion += 1;
+  sessionEpoch += 1;
+  draftPersistenceEnabled = false;
+  draftChanged = false;
+  draftRevision = undefined;
+  draftWriteAbortController.abort();
+  draftWriteAbortController = new AbortController();
+  draftWriteQueue = Promise.resolve();
+  draftSyncPromise = undefined;
+}
+
+function clearCredentialInputs() {
+  authEmail.value = "";
+  authPassword.value = "";
+  recoveryPassword.value = "";
+  recoveryPasswordConfirm.value = "";
+  recoveryPasswordConfirm.setCustomValidity("");
+}
+
+function finishLegacyMigrationPrompt(action) {
+  const resolve = resolveLegacyMigration;
+  resolveLegacyMigration = undefined;
+  pendingLegacyMigration = undefined;
+  if (legacyMigrationDialog.open) legacyMigrationDialog.close();
+  if (resolve) resolve(action);
+}
+
+function clearSensitiveWorkspace() {
+  neutralizeDraftWrites();
+  invoiceHistory = [];
+  historyNextCursor = undefined;
+  historyTotal = 0;
+  historyLoading = false;
+  historyLoadError = false;
+  historyRequestVersion += 1;
+  historyQuery = "";
+  invoiceSearch.value = "";
+  state = createInvoiceDraft();
+  state.draftDirty = false;
+  currentPage = "history";
+  clearValidationErrors();
+  fillForm();
+  renderInvoiceHistory();
+  outputFileName.textContent = "";
+  accountEmail.textContent = "";
+  setDraftSyncStatus("synced", "All changes synced");
+  if (outputDialog.open) outputDialog.close();
+  if (draftConflictDialog.open) draftConflictDialog.close();
+  resolveDraftConflictChoice?.("signed-out");
+  resolveDraftConflictChoice = undefined;
+  draftConflictOperation = undefined;
+  draftConflictRemote = undefined;
+  finishLegacyMigrationPrompt("signed-out");
+  clearCredentialInputs();
+}
+
+function hideWorkspace() {
+  invoiceListPage.hidden = true;
+  editorPage.hidden = true;
+  invoiceListButton.hidden = true;
+  newInvoiceButton.hidden = true;
+  printButton.hidden = true;
+}
+
+function showSignedOutPage() {
+  currentUser = undefined;
+  clearSensitiveWorkspace();
+  hideWorkspace();
+  accountControls.hidden = true;
+  authPage.hidden = false;
+  authConfigurationState.hidden = true;
+  authSignInState.hidden = false;
+  passwordRecoveryForm.hidden = true;
+  authPage.setAttribute("aria-labelledby", "authTitle");
+  document.body.dataset.page = "auth";
+  document.title = "Sign in | Invoice Studio";
+  setAuthMessage();
+  authEmail.focus({ preventScroll: true });
+}
+
+function showConfigurationPage() {
+  currentUser = undefined;
+  clearSensitiveWorkspace();
+  hideWorkspace();
+  accountControls.hidden = true;
+  authPage.hidden = false;
+  authConfigurationState.hidden = false;
+  authSignInState.hidden = true;
+  passwordRecoveryForm.hidden = true;
+  authPage.setAttribute("aria-labelledby", "configurationTitle");
+  document.body.dataset.page = "auth";
+  document.title = "Connect Supabase | Invoice Studio";
+  setAuthMessage();
+}
+
+function showPasswordRecoveryPage() {
+  hideWorkspace();
+  authPage.hidden = false;
+  authConfigurationState.hidden = true;
+  authSignInState.hidden = true;
+  passwordRecoveryForm.hidden = false;
+  authPage.setAttribute("aria-labelledby", "recoveryTitle");
+  document.body.dataset.page = "auth";
+  document.title = "Set a new password | Invoice Studio";
+  setAuthMessage();
+  recoveryPassword.focus({ preventScroll: true });
+}
+
+function legacyStorageData() {
+  const hasLegacyDraft = localStorage.getItem(STORAGE_KEY) !== null;
+  const hasLegacyHistory = localStorage.getItem(HISTORY_KEY) !== null;
+  const hasLegacySequence = localStorage.getItem(SEQUENCE_KEY) !== null;
+  return {
+    present: hasLegacyDraft || hasLegacyHistory || hasLegacySequence,
+    draft: loadLegacyDraft(),
+    records: loadLegacyInvoiceHistory(),
+  };
+}
+
+function clearLegacyStorage() {
+  localStorage.removeItem(STORAGE_KEY);
+  localStorage.removeItem(HISTORY_KEY);
+  localStorage.removeItem(SEQUENCE_KEY);
+}
+
+function legacyExportValue(key) {
+  const raw = localStorage.getItem(key);
+  if (raw === null) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return { unreadableRawValue: raw };
+  }
+}
+
+function exportLegacyBrowserData() {
+  const backup = {
+    exportedAt: new Date().toISOString(),
+    source: "Eng Hoon Residences Invoice Studio browser storage",
+    history: legacyExportValue(HISTORY_KEY),
+    draft: legacyExportValue(STORAGE_KEY),
+    sequence: legacyExportValue(SEQUENCE_KEY),
+  };
+  const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `invoice-studio-local-backup-${isoDate(new Date())}.json`;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+  legacyMigrationMessage.textContent = "Backup downloaded. Choose whether to move, discard, or keep the local data.";
+}
+
+function setLegacyMigrationBusy(isBusy) {
+  for (const button of legacyMigrationDialog.querySelectorAll("button")) button.disabled = isBusy;
+  legacyMigrationDialog.setAttribute("aria-busy", String(isBusy));
+}
+
+function promptForLegacyMigration(session) {
+  const legacy = legacyStorageData();
+  if (!legacy.present) return Promise.resolve("none");
+
+  pendingLegacyMigration = { ...legacy, userId: session.user.id };
+  const invoiceCount = legacy.records.length;
+  const parts = [`${invoiceCount} saved ${invoiceCount === 1 ? "invoice" : "invoices"}`];
+  if (legacy.draft) parts.push("1 draft");
+  if (invoiceCount === 0 && !legacy.draft) parts.push("unreadable local data");
+  legacyMigrationSummary.textContent = parts.join(" and ");
+  legacyMigrationDestination.textContent = session.user.email || "this signed-in account";
+  legacyMigrationMessage.textContent = "Nothing has been moved yet.";
+  legacyMigrationMessage.removeAttribute("data-state");
+  setLegacyMigrationBusy(false);
+  moveLegacyDataButton.disabled = invoiceCount === 0 && !legacy.draft;
+  legacyMigrationDialog.showModal();
+  return new Promise((resolve) => {
+    resolveLegacyMigration = resolve;
+  });
+}
+
+async function moveLegacyBrowserData() {
+  if (!pendingLegacyMigration) return;
+  setLegacyMigrationBusy(true);
+  legacyMigrationMessage.textContent = "Moving the selected local data...";
+  try {
+    await backend.migrateLocalData(
+      pendingLegacyMigration.userId,
+      pendingLegacyMigration.records,
+      pendingLegacyMigration.draft,
+    );
+    clearLegacyStorage();
+    finishLegacyMigrationPrompt("moved");
+  } catch (error) {
+    setLegacyMigrationBusy(false);
+    legacyMigrationMessage.textContent = error?.message || "The local data could not be moved. It is still stored in this browser.";
+    legacyMigrationMessage.dataset.state = "error";
+  }
+}
+
+function discardLegacyBrowserData() {
+  clearLegacyStorage();
+  finishLegacyMigrationPrompt("discarded");
+}
+
+async function cancelLegacyMigration() {
+  finishLegacyMigrationPrompt("cancelled");
+}
+
+function setDraftSyncStatus(stateName, message) {
+  syncStatus.textContent = message;
+  syncStatus.dataset.state = stateName;
+}
+
+function draftSummary(invoice, fallback = "No cloud draft") {
+  if (!invoice) return fallback;
+  const customer = String(invoice.billTo || "").trim() || "Untitled invoice";
+  return `${invoice.invoiceNumber || "Draft"} for ${customer}`;
+}
+
+function promptForDraftConflict(operation, remoteDraftRecord) {
+  draftConflictOperation = operation;
+  draftConflictRemote = remoteDraftRecord;
+  localDraftConflictSummary.textContent = operation.type === "delete"
+    ? "Delete the cloud draft"
+    : draftSummary(operation.invoice);
+  cloudDraftConflictSummary.textContent = draftSummary(remoteDraftRecord?.invoice);
+  setDraftSyncStatus("conflict", "Draft sync needs your choice");
+  if (!draftConflictDialog.open) draftConflictDialog.showModal();
+  return new Promise((resolve) => {
+    resolveDraftConflictChoice = resolve;
+  });
+}
+
+function finishDraftConflictChoice(choice) {
+  const resolve = resolveDraftConflictChoice;
+  resolveDraftConflictChoice = undefined;
+  if (draftConflictDialog.open) draftConflictDialog.close();
+  if (resolve) resolve(choice);
+}
+
+function retryDelay(attempts) {
+  return Math.min(DRAFT_RETRY_MAX_DELAY, 1000 * (2 ** Math.min(Math.max(0, attempts - 1), 5)));
+}
+
+function scheduleDraftRetry(delay) {
+  clearTimeout(draftRetryTimer);
+  if (!currentUser) return;
+  draftRetryTimer = window.setTimeout(() => flushDraftOutbox(), Math.max(0, delay));
+}
+
+function stageDraftSave() {
+  if (!draftPersistenceEnabled || !currentUser) return Promise.resolve(null);
+  const userId = currentUser.id;
+  const snapshot = cloneInvoice(state);
+  const expectedRevision = draftRevision;
+  outboxWriteQueue = outboxWriteQueue
+    .catch(() => {})
+    .then(() => draftOutbox.putSave(userId, snapshot, expectedRevision))
+    .then((operation) => {
+      if (currentUser?.id === userId) setDraftSyncStatus("waiting", "Saved on this device. Waiting to sync");
+      return operation;
+    })
+    .catch((error) => {
+      if (currentUser?.id === userId) setDraftSyncStatus("error", "Draft could not be saved on this device");
+      throw error;
+    });
+  return outboxWriteQueue;
+}
+
+function stageDraftDelete() {
+  if (!currentUser) return Promise.resolve(null);
+  const userId = currentUser.id;
+  const expectedRevision = draftRevision;
+  outboxWriteQueue = outboxWriteQueue
+    .catch(() => {})
+    .then(() => draftOutbox.putDelete(userId, expectedRevision))
+    .then((operation) => {
+      if (currentUser?.id === userId) setDraftSyncStatus("waiting", "Draft deletion waiting to sync");
+      return operation;
+    });
+  return outboxWriteQueue;
+}
+
+async function applyDraftConflictChoice(operation, remoteDraftRecord, choice) {
+  const userId = operation.userId;
+  if (choice === "local") {
+    const rebased = await draftOutbox.rebase(userId, operation.operationId, remoteDraftRecord?.revision);
+    if (rebased?.type === "save") {
+      state = normalizeInvoiceData(rebased.invoice) || state;
+      draftChanged = Boolean(state.draftDirty);
+      draftPersistenceEnabled = true;
+      fillForm();
+      renderInvoiceHistory();
+    }
+    draftRevision = remoteDraftRecord?.revision;
+    setDraftSyncStatus("waiting", "Saved on this device. Waiting to sync");
+    scheduleDraftRetry(0);
+    return;
+  }
+
+  await draftOutbox.remove(userId, operation.operationId);
+  draftRevision = remoteDraftRecord?.revision;
+  if (remoteDraftRecord?.invoice) {
+    state = normalizeInvoiceData(remoteDraftRecord.invoice) || state;
+    draftChanged = Boolean(state.draftDirty);
+    draftPersistenceEnabled = true;
+  } else {
+    state = await createCloudInvoiceDraft();
+    state.draftDirty = false;
+    draftChanged = false;
+    draftPersistenceEnabled = false;
+  }
+  fillForm();
+  renderInvoiceHistory();
+  setDraftSyncStatus("synced", "All changes synced");
+}
+
+async function handleDraftConflict(operation) {
+  if (!currentUser || currentUser.id !== operation.userId) return;
+  let remoteDraftRecord;
+  try {
+    remoteDraftRecord = await backend.loadDraft(operation.userId);
+  } catch {
+    const attempts = Number(operation.attempts || 0) + 1;
+    const delay = retryDelay(attempts);
+    await draftOutbox.markRetry(operation.userId, operation.operationId, attempts, Date.now() + delay, "Could not load cloud draft.");
+    setDraftSyncStatus("error", "Draft safe on this device. Sync retrying");
+    scheduleDraftRetry(delay);
+    return;
+  }
+  const choice = await promptForDraftConflict(operation, remoteDraftRecord);
+  if (choice === "signed-out") return;
+  await applyDraftConflictChoice(operation, remoteDraftRecord, choice);
+}
+
+async function runDraftOutboxSync(force = false) {
+  if (!currentUser) return true;
+  const userId = currentUser.id;
+  await outboxWriteQueue.catch(() => {});
+  const operation = await draftOutbox.get(userId);
+  if (!operation) {
+    setDraftSyncStatus("synced", "All changes synced");
+    return true;
+  }
+  if (!navigator.onLine) {
+    setDraftSyncStatus("waiting", "Saved on this device. Waiting to sync");
+    return false;
+  }
+  if (!force && operation.nextAttemptAt > Date.now()) {
+    setDraftSyncStatus("waiting", "Draft safe on this device. Sync retrying");
+    scheduleDraftRetry(operation.nextAttemptAt - Date.now());
+    return false;
+  }
+
+  setDraftSyncStatus("syncing", operation.type === "delete" ? "Deleting cloud draft..." : "Syncing draft...");
+  const expectedRevision = Number.isInteger(operation.expectedRevision) ? operation.expectedRevision : undefined;
+  try {
+    const result = operation.type === "delete"
+      ? await backend.deleteDraft(userId, undefined, expectedRevision)
+      : await backend.saveDraft(userId, operation.invoice, undefined, expectedRevision);
+    const nextRevision = operation.type === "delete" ? undefined : result?.revision;
+    await draftOutbox.remove(userId, operation.operationId);
+    const newerOperation = await draftOutbox.get(userId);
+    if (newerOperation && newerOperation.operationId !== operation.operationId) {
+      await draftOutbox.rebase(userId, newerOperation.operationId, nextRevision);
+      scheduleDraftRetry(0);
+      setDraftSyncStatus("waiting", "Saved on this device. Waiting to sync");
+    } else {
+      draftRevision = nextRevision;
+      const time = new Intl.DateTimeFormat("en-SG", { hour: "numeric", minute: "2-digit" }).format(new Date());
+      setDraftSyncStatus("synced", `Synced ${time}`);
+      saveStatus.textContent = `Saved ${time}`;
+    }
+    return true;
+  } catch (error) {
+    if (error?.code === "DRAFT_REVISION_CONFLICT") {
+      await handleDraftConflict(operation);
+      return false;
+    }
+    const attempts = Number(operation.attempts || 0) + 1;
+    const delay = retryDelay(attempts);
+    await draftOutbox.markRetry(userId, operation.operationId, attempts, Date.now() + delay, error?.message);
+    setDraftSyncStatus("error", "Draft safe on this device. Sync retrying");
+    saveStatus.textContent = "Saved on this device";
+    scheduleDraftRetry(delay);
+    return false;
+  }
+}
+
+function flushDraftOutbox(options = {}) {
+  if (draftSyncPromise) return draftSyncPromise;
+  draftSyncPromise = runDraftOutboxSync(Boolean(options.force))
+    .finally(() => {
+      draftSyncPromise = undefined;
+    });
+  return draftSyncPromise;
+}
+
+async function reconcileDraftOutbox(userId, remoteDraftRecord) {
+  const operation = await draftOutbox.get(userId);
+  if (!operation) return remoteDraftRecord;
+
+  if (operation.type === "delete") {
+    if (!remoteDraftRecord) {
+      await draftOutbox.remove(userId, operation.operationId);
+      setDraftSyncStatus("synced", "All changes synced");
+      return null;
+    }
+    if (operation.expectedRevision === remoteDraftRecord.revision) {
+      draftRevision = remoteDraftRecord.revision;
+      setDraftSyncStatus("waiting", "Draft deletion waiting to sync");
+      scheduleDraftRetry(0);
+      return null;
+    }
+  } else {
+    const localInvoice = normalizeInvoiceData(operation.invoice);
+    const remoteInvoice = normalizeInvoiceData(remoteDraftRecord?.invoice);
+    if (remoteDraftRecord && localInvoice && remoteInvoice && invoiceFingerprint(localInvoice) === invoiceFingerprint(remoteInvoice)) {
+      await draftOutbox.remove(userId, operation.operationId);
+      setDraftSyncStatus("synced", "All changes synced");
+      return remoteDraftRecord;
+    }
+    const expectedRevision = Number.isInteger(operation.expectedRevision) ? operation.expectedRevision : undefined;
+    if ((!remoteDraftRecord && expectedRevision === undefined)
+      || (remoteDraftRecord && expectedRevision === remoteDraftRecord.revision)) {
+      setDraftSyncStatus("waiting", "Draft restored from this device. Waiting to sync");
+      scheduleDraftRetry(0);
+      return { invoice: localInvoice, revision: remoteDraftRecord?.revision };
+    }
+  }
+
+  const choice = await promptForDraftConflict(operation, remoteDraftRecord);
+  if (choice === "signed-out") return remoteDraftRecord;
+  if (choice === "cloud") {
+    await draftOutbox.remove(userId, operation.operationId);
+    setDraftSyncStatus("synced", "All changes synced");
+    return remoteDraftRecord;
+  }
+  await draftOutbox.rebase(userId, operation.operationId, remoteDraftRecord?.revision);
+  setDraftSyncStatus("waiting", "Saved on this device. Waiting to sync");
+  scheduleDraftRetry(0);
+  return operation.type === "save"
+    ? { invoice: normalizeInvoiceData(operation.invoice), revision: remoteDraftRecord?.revision }
+    : null;
+}
+
+function normalizeHistoryRecords(records) {
+  return records
+    .map((record) => {
+      const invoice = normalizeInvoiceData(record.invoice);
+      if (!invoice) return null;
+      invoice.historyId = record.id;
+      return { ...record, invoice };
+    })
+    .filter(Boolean);
+}
+
+function setHistoryLoading(isLoading) {
+  historyLoading = isLoading;
+  historySection.setAttribute("aria-busy", String(isLoading));
+  historyLoadingState.hidden = !isLoading;
+  loadMoreInvoicesButton.disabled = isLoading;
+}
+
+async function loadInvoiceHistory(options = {}) {
+  if (!currentUser || historyLoading) return false;
+  const reset = Boolean(options.reset);
+  const requestVersion = reset ? ++historyRequestVersion : historyRequestVersion;
+  const cursor = reset ? null : historyNextCursor;
+  if (reset) {
+    historyLoadError = false;
+    historyErrorState.hidden = true;
+    historyNextCursor = undefined;
+    historyTotal = 0;
+    invoiceHistory = [];
+    renderInvoiceHistory();
+  }
+  setHistoryLoading(true);
+  renderInvoiceHistory();
+  try {
+    const page = await backend.listInvoices(currentUser.id, {
+      limit: HISTORY_PAGE_SIZE,
+      cursor,
+      query: historyQuery,
+    });
+    if (requestVersion !== historyRequestVersion) return false;
+    const records = normalizeHistoryRecords(page.records || []);
+    const knownIds = new Set(invoiceHistory.map((record) => record.id));
+    invoiceHistory = reset
+      ? records
+      : [...invoiceHistory, ...records.filter((record) => !knownIds.has(record.id))];
+    historyNextCursor = page.nextCursor || undefined;
+    historyTotal = Number.isFinite(Number(page.total)) ? Number(page.total) : invoiceHistory.length;
+    historyLoadError = false;
+    return true;
+  } catch {
+    if (requestVersion === historyRequestVersion) historyLoadError = true;
+    return false;
+  } finally {
+    if (requestVersion === historyRequestVersion) {
+      setHistoryLoading(false);
+      renderInvoiceHistory();
+    }
+  }
+}
+
+async function loadAuthenticatedWorkspace(session) {
+  if (!session?.user || workspaceLoading) return;
+  if (currentUser?.id === session.user.id && !invoiceListPage.hidden) return;
+  workspaceLoading = true;
+  if (currentUser?.id && currentUser.id !== session.user.id) neutralizeDraftWrites();
+  currentUser = session.user;
+  accountEmail.textContent = session.user.email || "Signed in";
+  accountControls.hidden = false;
+  authPage.hidden = false;
+  setAuthMessage("Loading your invoices...");
+
+  try {
+    const migrationAction = await promptForLegacyMigration(session);
+    if (migrationAction === "cancelled") {
+      await backend.signOut();
+      return;
+    }
+    if (migrationAction === "signed-out") return;
+    const [historyPage, remoteDraftRecord] = await Promise.all([
+      backend.listInvoices(currentUser.id, { limit: HISTORY_PAGE_SIZE, query: "" }),
+      backend.loadDraft(currentUser.id),
+    ]);
+    invoiceHistory = normalizeHistoryRecords(historyPage.records || []);
+    historyNextCursor = historyPage.nextCursor || undefined;
+    historyTotal = Number.isFinite(Number(historyPage.total)) ? Number(historyPage.total) : invoiceHistory.length;
+    historyLoadError = false;
+    const reconciledDraftRecord = await reconcileDraftOutbox(currentUser.id, remoteDraftRecord);
+    state = normalizeInvoiceData(reconciledDraftRecord?.invoice) || await createCloudInvoiceDraft();
+    draftRevision = Number.isInteger(reconciledDraftRecord?.revision) ? reconciledDraftRecord.revision : undefined;
+    draftChanged = Boolean(state.draftDirty);
+    draftPersistenceEnabled = Boolean(reconciledDraftRecord);
+    clearValidationErrors();
+    fillForm();
+    passwordRecoveryForm.hidden = true;
+    authPage.hidden = true;
+    showInvoiceList(false);
+    flushDraftOutbox();
+    if (migrationAction === "moved") showToast("Existing browser invoices were moved to your account.");
+    if (migrationAction === "discarded") showToast("Local browser data was discarded without moving it.");
+  } catch (error) {
+    try {
+      await backend.signOut();
+    } catch {}
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+    showSignedOutPage();
+    setAuthMessage(error?.message || "Your account data could not be loaded. Try again.", "error");
+  } finally {
+    workspaceLoading = false;
+  }
+}
+
+async function handleSignIn(event) {
+  event.preventDefault();
+  if (!authForm.reportValidity()) return;
+  const email = authEmail.value.trim();
+  const password = authPassword.value;
+  authPassword.value = "";
+  setAuthBusy(true);
+  setAuthMessage("Signing in...");
+  try {
+    const { session } = await backend.signIn(email, password);
+    if (session) await loadAuthenticatedWorkspace(session);
+  } catch (error) {
+    setAuthMessage(error?.message || "Sign-in failed. Check your email and password.", "error");
+  } finally {
+    setAuthBusy(false);
+  }
+}
+
+async function handleCreateAccount() {
+  if (!authForm.reportValidity()) return;
+  const email = authEmail.value.trim();
+  const password = authPassword.value;
+  authPassword.value = "";
+  setAuthBusy(true);
+  setAuthMessage("Creating your account...");
+  try {
+    const { session } = await backend.signUp(email, password);
+    if (session) {
+      await loadAuthenticatedWorkspace(session);
+    } else {
+      setAuthMessage("Check your email to confirm the account, then return here to sign in.");
+    }
+  } catch (error) {
+    setAuthMessage(error?.message || "The account could not be created.", "error");
+  } finally {
+    setAuthBusy(false);
+  }
+}
+
+async function handlePasswordReset() {
+  if (!authEmail.reportValidity()) return;
+  setAuthBusy(true);
+  setAuthMessage("Sending a password reset link...");
+  try {
+    await backend.sendPasswordReset(authEmail.value.trim());
+    setAuthMessage("If that email has an account, a password reset link is on its way.");
+  } catch (error) {
+    setAuthMessage(error?.message || "The reset link could not be sent.", "error");
+  } finally {
+    setAuthBusy(false);
+  }
+}
+
+async function handlePasswordRecovery(event) {
+  event.preventDefault();
+  if (!passwordRecoveryForm.reportValidity()) return;
+  if (recoveryPassword.value !== recoveryPasswordConfirm.value) {
+    recoveryPasswordConfirm.setCustomValidity("Passwords must match.");
+    recoveryPasswordConfirm.reportValidity();
+    return;
+  }
+  recoveryPasswordConfirm.setCustomValidity("");
+  const password = recoveryPassword.value;
+  recoveryPassword.value = "";
+  recoveryPasswordConfirm.value = "";
+  setAuthBusy(true);
+  setAuthMessage("Updating your password...");
+  try {
+    await backend.updatePassword(password);
+    const session = await backend.getSession();
+    setAuthMessage("Password updated.");
+    await loadAuthenticatedWorkspace(session);
+  } catch (error) {
+    setAuthMessage(error?.message || "The password could not be updated.", "error");
+  } finally {
+    setAuthBusy(false);
+  }
+}
+
+async function handleSignOut() {
+  signOutButton.disabled = true;
+  try {
+    await persistDraftImmediately();
+    await outboxWriteQueue.catch(() => {});
+    if (currentUser && await draftOutbox.has(currentUser.id)) {
+      setDraftSyncStatus("error", "Sync this draft before signing out");
+      showToast("This draft is saved on this device but has not synced. Reconnect and wait for sync before signing out.");
+      return;
+    }
+    await backend.signOut();
+    showSignedOutPage();
+  } catch (error) {
+    showToast(error?.message || "Sign-out failed. Try again.");
+  } finally {
+    signOutButton.disabled = false;
+  }
+}
+
+async function initializeApplication() {
+  if (!backend?.configured) {
+    showConfigurationPage();
+    return;
+  }
+
+  backend.onAuthStateChange((event, session) => {
+    if (event === "PASSWORD_RECOVERY") {
+      currentUser = session?.user;
+      showPasswordRecoveryPage();
+      return;
+    }
+    if (event === "SIGNED_OUT") {
+      showSignedOutPage();
+      return;
+    }
+    if (session && (event === "SIGNED_IN" || event === "INITIAL_SESSION")) {
+      loadAuthenticatedWorkspace(session);
+    }
+  });
+
+  try {
+    const session = await backend.getSession();
+    if (session) await loadAuthenticatedWorkspace(session);
+    else showSignedOutPage();
+  } catch (error) {
+    showSignedOutPage();
+    setAuthMessage(error?.message || "Authentication is unavailable. Try again.", "error");
+  }
+}
+
 function normalizeQuantity(value) {
   const quantity = Number(value);
   if (!Number.isFinite(quantity)) return 1;
-  return Math.max(1, Math.round(quantity));
+  return Math.min(MAX_QUANTITY, Math.max(1, Math.round(quantity)));
 }
 
-function createInvoiceDraft() {
+function createInvoiceDraft(invoiceNumberOverride) {
   const today = new Date();
   const due = new Date(today);
   due.setDate(due.getDate() + 7);
-  const invoiceNumber = nextInvoiceNumber(today);
+  const compactDate = isoDate(today).replaceAll("-", "");
+  const invoiceNumber = invoiceNumberOverride || `EHR-${compactDate}-001`;
   return {
     draftDirty: false,
     invoiceNumber,
@@ -136,17 +913,11 @@ function createInvoiceDraft() {
   };
 }
 
-function nextInvoiceNumber(date) {
-  const compactDate = isoDate(date).replaceAll("-", "");
-  let sequence = 1;
-  try {
-    const saved = JSON.parse(localStorage.getItem(SEQUENCE_KEY) || "null");
-    if (saved?.date === compactDate && Number.isInteger(saved.sequence)) sequence = saved.sequence + 1;
-    localStorage.setItem(SEQUENCE_KEY, JSON.stringify({ date: compactDate, sequence }));
-  } catch {
-    sequence = Date.now() % 1000000;
-  }
-  return `EHR-${compactDate}-${String(sequence).padStart(3, "0")}`;
+async function createCloudInvoiceDraft() {
+  if (!currentUser) throw new Error("Sign in before creating an invoice.");
+  const today = isoDate(new Date());
+  const invoiceNumber = await backend.nextInvoiceNumber(today);
+  return createInvoiceDraft(invoiceNumber);
 }
 
 function saveDraft(markChanged = true) {
@@ -156,26 +927,23 @@ function saveDraft(markChanged = true) {
     draftChanged = true;
     state.draftDirty = true;
   }
-  saveStatus.textContent = "Saving...";
-  saveTimer = window.setTimeout(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-      const time = new Intl.DateTimeFormat("en-SG", { hour: "numeric", minute: "2-digit" }).format(new Date());
-      saveStatus.textContent = `Saved ${time}`;
-    } catch {
-      saveStatus.textContent = "Could not save on this device";
-    }
-  }, 220);
+  if (!currentUser) return;
+  saveStatus.textContent = "Saving on this device...";
+  stageDraftSave().catch(() => {
+    saveStatus.textContent = "Could not save draft on this device";
+  });
+  saveTimer = window.setTimeout(() => flushDraftOutbox(), 350);
 }
 
-function persistDraftImmediately() {
-  if (!draftPersistenceEnabled) return;
+async function persistDraftImmediately() {
+  if (!draftPersistenceEnabled || !currentUser) return true;
   clearTimeout(saveTimer);
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    await stageDraftSave();
   } catch {
-    // The visible save status already reports storage failures during normal editing.
+    return false;
   }
+  return flushDraftOutbox({ force: true });
 }
 
 function formatDate(value) {
@@ -258,35 +1026,64 @@ function historyRecordId() {
   return `invoice-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-function saveCurrentInvoiceToHistory() {
+async function deleteCloudDraft() {
+  clearTimeout(saveTimer);
+  if (!currentUser) return true;
+  const userId = currentUser.id;
+  await stageDraftDelete();
+  await flushDraftOutbox({ force: true });
+  if (await draftOutbox.has(userId)) throw new Error("Draft deletion is waiting to sync.");
+  draftRevision = undefined;
+  return true;
+}
+
+async function saveCurrentInvoiceToHistory() {
+  if (!currentUser) {
+    showToast("Sign in before saving an invoice.");
+    return false;
+  }
   const now = new Date().toISOString();
   const id = state.historyId || historyRecordId();
   const existingRecord = invoiceHistory.find((record) => record.id === id);
   const savedInvoice = cloneInvoice({ ...state, historyId: id, draftDirty: false });
   const savedRecord = {
     id,
+    revision: existingRecord?.revision,
     createdAt: existingRecord?.createdAt || now,
     updatedAt: now,
     invoice: savedInvoice,
   };
-  const nextHistory = [savedRecord, ...invoiceHistory.filter((record) => record.id !== id)];
-
+  let remoteRecord;
   try {
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(nextHistory));
-  } catch {
-    saveStatus.textContent = "Could not save invoice history on this device";
-    showToast("The invoice could not be added to history on this device.");
+    await persistDraftImmediately();
+    remoteRecord = await backend.saveInvoice(currentUser.id, savedRecord);
+  } catch (error) {
+    if (error?.code === "INVOICE_REVISION_CONFLICT") {
+      saveStatus.textContent = "Invoice changed elsewhere";
+      showToast("This invoice changed in another session. Your edits were not overwritten; reload the invoice before saving again.");
+    } else if (error?.code === "INVOICE_NUMBER_CONFLICT") {
+      saveStatus.textContent = "Invoice number already used";
+      showToast("That invoice number is already in use. Choose a unique invoice number and save again.");
+    } else {
+      saveStatus.textContent = "Could not save invoice";
+      showToast("The invoice could not be saved. Check your connection and try again.");
+    }
     return false;
   }
 
+  try {
+    await deleteCloudDraft();
+  } catch {
+    // The invoice is already safely stored. The durable outbox will retry the
+    // draft deletion, and sign-out remains blocked until it succeeds.
+  }
+  invoiceHistory = [remoteRecord, ...invoiceHistory.filter((record) => record.id !== id)];
+  if (!existingRecord) historyTotal += 1;
+  historyQuery = "";
+  invoiceSearch.value = "";
+
   state.historyId = id;
   state.draftDirty = false;
-  invoiceHistory = nextHistory;
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  } catch {
-    // The history record is the authoritative saved copy; draft persistence is best effort.
-  }
   draftChanged = false;
   saveStatus.textContent = existingRecord ? "Invoice changes saved" : "Invoice saved to history";
   renderInvoiceHistory();
@@ -304,11 +1101,8 @@ function createHistoryMeta(label, value) {
 }
 
 function renderInvoiceHistory() {
-  const query = historyQuery.trim().toLocaleLowerCase("en-SG");
-  const visibleRecords = invoiceHistory.filter((record) => {
-    if (!query) return true;
-    return `${record.invoice.invoiceNumber} ${record.invoice.billTo}`.toLocaleLowerCase("en-SG").includes(query);
-  });
+  const query = historyQuery.trim();
+  const visibleRecords = invoiceHistory;
 
   invoiceHistoryList.replaceChildren();
   visibleRecords.forEach((record) => {
@@ -356,14 +1150,19 @@ function renderInvoiceHistory() {
     invoiceHistoryList.append(article);
   });
 
-  const total = invoiceHistory.length;
-  invoiceCount.textContent = query
-    ? `${visibleRecords.length} of ${total} ${total === 1 ? "invoice" : "invoices"}`
-    : `${total} ${total === 1 ? "invoice" : "invoices"}`;
-  invoiceSearchField.hidden = total < 2;
-  historyNewInvoiceButton.hidden = total === 0;
-  historyEmptyState.hidden = total !== 0;
-  historyNoResults.hidden = total === 0 || visibleRecords.length !== 0;
+  const total = historyTotal;
+  invoiceCount.textContent = historyLoading && visibleRecords.length === 0
+    ? "Loading..."
+    : query
+      ? `${visibleRecords.length} of ${total} ${total === 1 ? "invoice" : "invoices"}`
+      : `${total} ${total === 1 ? "invoice" : "invoices"}`;
+  invoiceSearchField.hidden = total < 2 && !query;
+  historyNewInvoiceButton.hidden = total === 0 && !query;
+  historyLoadingState.hidden = !historyLoading;
+  historyErrorState.hidden = !historyLoadError;
+  historyEmptyState.hidden = historyLoading || historyLoadError || Boolean(query) || total !== 0;
+  historyNoResults.hidden = historyLoading || historyLoadError || !query || total !== 0;
+  loadMoreInvoicesButton.hidden = historyLoading || historyLoadError || !historyNextCursor;
 
   const showDraft = hasUnsavedDraft();
   draftNotice.hidden = !showDraft;
@@ -428,12 +1227,18 @@ function editSavedInvoice(id) {
   showEditorPage("edit");
 }
 
-function duplicateSavedInvoice(id) {
+async function duplicateSavedInvoice(id) {
   const record = invoiceHistory.find((candidate) => candidate.id === id);
   if (!record || !canReplaceCurrentDraft("Duplicate this invoice and replace your unsaved draft?")) return;
   clearTimeout(saveTimer);
   clearValidationErrors();
-  const freshInvoice = createInvoiceDraft();
+  let freshInvoice;
+  try {
+    freshInvoice = await createCloudInvoiceDraft();
+  } catch {
+    showToast("A new invoice number could not be created. Check your connection and try again.");
+    return;
+  }
   state = {
     ...cloneInvoice(record.invoice),
     historyId: undefined,
@@ -576,6 +1381,7 @@ function renderItemsEditor() {
 
     const description = document.createElement("textarea");
     description.rows = 2;
+    description.maxLength = MAX_ITEM_DESCRIPTION_LENGTH;
     description.value = item.description;
     description.required = true;
     description.dataset.itemField = "description";
@@ -744,7 +1550,7 @@ function isoDate(date) {
   return `${year}-${month}-${day}`;
 }
 
-function newInvoice() {
+async function newInvoice() {
   const canUseCurrentBlankDraft = currentPage === "history" && !state.historyId && !hasUnsavedDraft();
   if (canUseCurrentBlankDraft) {
     saveStatus.textContent = "Draft ready";
@@ -753,7 +1559,13 @@ function newInvoice() {
   }
   if (!canReplaceCurrentDraft("Start a new invoice and replace the current unsaved draft?")) return;
   clearValidationErrors();
-  state = createInvoiceDraft();
+  try {
+    await deleteCloudDraft();
+    state = await createCloudInvoiceDraft();
+  } catch {
+    showToast("A new invoice could not be created. Check your connection and try again.");
+    return;
+  }
   draftChanged = false;
   draftPersistenceEnabled = true;
   fillForm();
@@ -762,26 +1574,32 @@ function newInvoice() {
   showToast("New invoice ready.");
 }
 
-function clearSavedDraft() {
-  if (!window.confirm("Clear the saved invoice draft from this browser?")) return;
-  resetDraft();
+async function clearSavedDraft() {
+  if (!window.confirm("Delete this draft from your account?")) return;
+  if (!await resetDraft()) return;
   saveStatus.textContent = "Saved draft cleared";
-  showToast("Saved draft cleared from this browser.");
+  showToast("Draft deleted from your account.");
 }
 
-function resetDraft() {
+async function resetDraft() {
   clearTimeout(saveTimer);
-  localStorage.removeItem(STORAGE_KEY);
-  state = createInvoiceDraft();
+  try {
+    await deleteCloudDraft();
+    state = await createCloudInvoiceDraft();
+  } catch {
+    showToast("The draft could not be deleted. Check your connection and try again.");
+    return false;
+  }
   draftChanged = false;
   draftPersistenceEnabled = false;
   clearValidationErrors();
   fillForm();
+  return true;
 }
 
-function deleteUnsavedDraft() {
+async function deleteUnsavedDraft() {
   if (!window.confirm("Delete this unsaved draft? This cannot be undone.")) return;
-  resetDraft();
+  if (!await resetDraft()) return;
   renderInvoiceHistory();
   saveStatus.textContent = "Draft deleted";
   showToast("Unsaved draft deleted.");
@@ -882,10 +1700,15 @@ function invoiceIsReady(action) {
   return true;
 }
 
-function openOutputDialog(event) {
+async function openOutputDialog(event) {
   if (!invoiceIsReady("saving or printing")) return;
-  if (!saveCurrentInvoiceToHistory()) return;
   outputDialogTrigger = event.currentTarget;
+  printButton.disabled = true;
+  document.querySelector("#mobilePrintButton").disabled = true;
+  const saved = await saveCurrentInvoiceToHistory();
+  printButton.disabled = false;
+  document.querySelector("#mobilePrintButton").disabled = false;
+  if (!saved) return;
   outputFileName.textContent = `${safePdfFileName(state.pdfFileName, state.invoiceNumber)}.pdf`;
   outputDialog.showModal();
 }
@@ -911,28 +1734,46 @@ function setOutputBusy(isBusy) {
   outputDialog.setAttribute("aria-busy", String(isBusy));
 }
 
+function loadPdfLibrary() {
+  if (typeof window.html2pdf === "function") return Promise.resolve(window.html2pdf);
+  if (pdfLibraryPromise) return pdfLibraryPromise;
+  pdfLibraryPromise = new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = PDF_LIBRARY_URL;
+    script.async = true;
+    script.dataset.pdfLibrary = "html2pdf";
+    script.addEventListener("load", () => {
+      if (typeof window.html2pdf === "function") resolve(window.html2pdf);
+      else reject(new Error("The PDF library did not initialize."));
+    }, { once: true });
+    script.addEventListener("error", () => reject(new Error("The PDF library could not be loaded.")), { once: true });
+    document.head.append(script);
+  }).catch((error) => {
+    pdfLibraryPromise = undefined;
+    document.querySelector('script[data-pdf-library="html2pdf"]')?.remove();
+    throw error;
+  });
+  return pdfLibraryPromise;
+}
+
 async function downloadInvoicePdf() {
   if (!invoiceIsReady("saving")) {
     dismissOutputDialog();
     return;
   }
-  if (typeof window.html2pdf !== "function") {
-    showToast("PDF saving is unavailable. Reload the app and try again.");
-    return;
-  }
-
-  const pdfBaseName = safePdfFileName(state.pdfFileName, state.invoiceNumber);
-  const pdfFileName = `${pdfBaseName}.pdf`;
-  const exportSheet = invoiceSheet.cloneNode(true);
-  exportSheet.removeAttribute("id");
-  exportSheet.style.width = `${Math.floor(PAPER_WIDTH)}px`;
-  exportSheet.style.minHeight = `${Math.floor(PAPER_HEIGHT) - 1}px`;
-  exportSheet.style.margin = "0";
-  exportSheet.style.boxShadow = "none";
-  exportSheet.style.transform = "none";
 
   setOutputBusy(true);
   try {
+    await loadPdfLibrary();
+    const pdfBaseName = safePdfFileName(state.pdfFileName, state.invoiceNumber);
+    const pdfFileName = `${pdfBaseName}.pdf`;
+    const exportSheet = invoiceSheet.cloneNode(true);
+    exportSheet.removeAttribute("id");
+    exportSheet.style.width = `${Math.floor(PAPER_WIDTH)}px`;
+    exportSheet.style.minHeight = `${Math.floor(PAPER_HEIGHT) - 1}px`;
+    exportSheet.style.margin = "0";
+    exportSheet.style.boxShadow = "none";
+    exportSheet.style.transform = "none";
     const worker = window
       .html2pdf()
       .set({
@@ -957,8 +1798,11 @@ async function downloadInvoicePdf() {
       .save();
     dismissOutputDialog();
     showToast(`${pdfFileName} saved.`);
-  } catch {
-    showToast("The PDF could not be created. Try again or use Print.");
+  } catch (error) {
+    const message = typeof window.html2pdf === "function"
+      ? "The PDF could not be created. Try again or use Print."
+      : "PDF saving is unavailable. Check your connection and try again, or use Print.";
+    showToast(message);
   } finally {
     setOutputBusy(false);
   }
@@ -1006,6 +1850,14 @@ function setPreviewScaleMode(mode) {
 
 function updateConnectionStatus() {
   offlineBanner.hidden = navigator.onLine;
+  if (navigator.onLine) {
+    clearTimeout(draftRetryTimer);
+    flushDraftOutbox({ force: true });
+  } else if (currentUser) {
+    draftOutbox.has(currentUser.id).then((pending) => {
+      if (pending) setDraftSyncStatus("waiting", "Saved on this device. Waiting to sync");
+    }).catch(() => {});
+  }
 }
 
 form.addEventListener("input", handleFieldInput);
@@ -1053,9 +1905,18 @@ invoiceHistoryList.addEventListener("click", (event) => {
   if (duplicateButton) duplicateSavedInvoice(duplicateButton.dataset.duplicateInvoice);
 });
 invoiceSearch.addEventListener("input", () => {
-  historyQuery = invoiceSearch.value;
-  renderInvoiceHistory();
+  clearTimeout(historySearchTimer);
+  historyQuery = invoiceSearch.value.trim();
+  historySearchTimer = window.setTimeout(() => {
+    if (historyLoading) {
+      invoiceSearch.dispatchEvent(new Event("input", { bubbles: false }));
+      return;
+    }
+    loadInvoiceHistory({ reset: true });
+  }, 300);
 });
+loadMoreInvoicesButton.addEventListener("click", () => loadInvoiceHistory());
+retryHistoryButton.addEventListener("click", () => loadInvoiceHistory({ reset: invoiceHistory.length === 0 }));
 document.querySelector("#clearDraftButton").addEventListener("click", clearSavedDraft);
 printButton.addEventListener("click", openOutputDialog);
 document.querySelector("#mobilePrintButton").addEventListener("click", openOutputDialog);
@@ -1077,6 +1938,17 @@ outputDialog.addEventListener("close", () => {
   if (outputDialogTrigger?.isConnected) outputDialogTrigger.focus();
   outputDialogTrigger = undefined;
 });
+legacyMigrationDialog.addEventListener("cancel", (event) => {
+  event.preventDefault();
+  cancelLegacyMigration();
+});
+moveLegacyDataButton.addEventListener("click", moveLegacyBrowserData);
+exportLegacyDataButton.addEventListener("click", exportLegacyBrowserData);
+discardLegacyDataButton.addEventListener("click", discardLegacyBrowserData);
+cancelLegacyMigrationButton.addEventListener("click", cancelLegacyMigration);
+draftConflictDialog.addEventListener("cancel", (event) => event.preventDefault());
+keepLocalDraftButton.addEventListener("click", () => finishDraftConflictChoice("local"));
+keepCloudDraftButton.addEventListener("click", () => finishDraftConflictChoice("cloud"));
 
 window.addEventListener("online", updateConnectionStatus);
 window.addEventListener("offline", updateConnectionStatus);
@@ -1103,6 +1975,13 @@ installButton.addEventListener("click", async () => {
   installButton.hidden = true;
 });
 
+authForm.addEventListener("submit", handleSignIn);
+createAccountButton.addEventListener("click", handleCreateAccount);
+forgotPasswordButton.addEventListener("click", handlePasswordReset);
+passwordRecoveryForm.addEventListener("submit", handlePasswordRecovery);
+recoveryPasswordConfirm.addEventListener("input", () => recoveryPasswordConfirm.setCustomValidity(""));
+signOutButton.addEventListener("click", handleSignOut);
+
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
     navigator.serviceWorker.register("./sw.js").catch(() => {
@@ -1118,7 +1997,6 @@ window.addEventListener("beforeprint", () => {
 });
 window.addEventListener("afterprint", updatePreviewScale);
 
-fillForm();
 updateConnectionStatus();
 updatePreviewScale();
-showInvoiceList(false);
+initializeApplication();

@@ -1,7 +1,7 @@
 {
   "name": "Invoice Studio for Eng Hoon Residences",
   "short_name": "Invoice Studio",
-  "description": "Create print-ready invoices quickly, even while offline.",
+  "description": "Create and securely sync print-ready invoices.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

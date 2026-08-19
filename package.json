@@ -2,12 +2,21 @@
   "name": "invoice-studio",
   "version": "1.0.0",
   "private": true,
-  "description": "Fast, offline-capable invoice generator for Eng Hoon Residences.",
+  "packageManager": "npm@11.17.0",
+  "engines": {
+    "node": "24.19.0",
+    "npm": "11.17.0"
+  },
+  "description": "Secure, account-based invoice generator for Eng Hoon Residences.",
   "scripts": {
-    "check": "node --check app.js && node --check sw.js && node --check tests/app.test.js",
-    "test": "npm run check && node --test tests/app.test.js"
+    "build": "npm run verify:vendor && node scripts/build-static.js",
+    "check": "node --check app.js && node --check backend.js && node --check outbox.js && node --check supabase-config.js && node --check sw.js && node --check scripts/vendor-manifest.js && node --check scripts/sync-vendor.js && node --check scripts/verify-vendor.js && node --check scripts/build-static.js && node --check tests/browser-backend-mock.js && node --check tests/outbox.test.js && node --check tests/infrastructure.test.js && node --check tests/app.test.js",
+    "sync:vendor": "node scripts/sync-vendor.js",
+    "test": "npm run check && node --test --test-concurrency=1 tests/outbox.test.js tests/infrastructure.test.js tests/app.test.js",
+    "verify:vendor": "node scripts/verify-vendor.js"
   },
   "dependencies": {
-    "html2pdf.js": "^0.14.0"
+    "@supabase/supabase-js": "2.112.3",
+    "html2pdf.js": "0.14.0"
   }
 }

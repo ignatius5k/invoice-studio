@@ -1,28 +1,96 @@
-const CACHE_NAME = "invoice-studio-v25";
+const CACHE_PREFIX = "invoice-studio-";
+const CACHE_NAME = `${CACHE_PREFIX}v27`;
 const APP_SHELL = [
   "./",
   "./index.html",
-  "./styles.css?v=25",
-  "./vendor/html2pdf.bundle.min.js?v=25",
-  "./app.js?v=25",
+  "./styles.css?v=27",
+  "./vendor/html2pdf.bundle.min.js?v=27",
+  "./vendor/supabase.js?v=27",
+  "./supabase-config.js?v=27",
+  "./backend.js?v=27",
+  "./outbox.js?v=27",
+  "./app.js?v=27",
   "./manifest.webmanifest",
   "./eng-hoon-residences-logo.png",
   "./icon-192.png",
   "./icon-512.png"
 ];
 
+function appUrl(relativePath) {
+  return new URL(relativePath, self.registration.scope).href;
+}
+
+function isAppShellRequest(requestUrl) {
+  return APP_SHELL.some((relativePath) => appUrl(relativePath) === requestUrl.href);
+}
+
+function isCacheableResponse(response) {
+  return Boolean(response && response.ok && response.type !== "opaque");
+}
+
+async function namedCacheMatch(request) {
+  const cache = await caches.open(CACHE_NAME);
+  return cache.match(request);
+}
+
+async function fetchShellRequest(event) {
+  const networkRequest = fetch(event.request);
+  const cacheWrite = networkRequest
+    .then(async (response) => {
+      if (!isCacheableResponse(response)) return;
+      const cache = await caches.open(CACHE_NAME);
+      await cache.put(event.request, response.clone());
+    })
+    .catch(() => {});
+  event.waitUntil(cacheWrite);
+
+  try {
+    return await networkRequest;
+  } catch {
+    return (await namedCacheMatch(event.request)) || Response.error();
+  }
+}
+
+async function fetchNavigation(event) {
+  const requestUrl = new URL(event.request.url);
+  const shellNavigation = requestUrl.href === appUrl("./") || requestUrl.href === appUrl("./index.html");
+  const networkRequest = fetch(event.request);
+  if (shellNavigation) {
+    const cacheWrite = networkRequest
+      .then(async (response) => {
+        if (!isCacheableResponse(response)) return;
+        const cache = await caches.open(CACHE_NAME);
+        await cache.put(event.request, response.clone());
+      })
+      .catch(() => {});
+    event.waitUntil(cacheWrite);
+  }
+
+  try {
+    return await networkRequest;
+  } catch {
+    return (await namedCacheMatch(appUrl("./index.html"))) || Response.error();
+  }
+}
+
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)));
-  self.skipWaiting();
+  // A first installation has no active worker to protect. Updates remain in
+  // waiting until the app explicitly requests activation.
+  if (!self.registration.active) self.skipWaiting();
 });
 
 self.addEventListener("activate", (event) => {
   event.waitUntil(
     caches
       .keys()
-      .then((keys) => Promise.all(keys.filter((key) => key.startsWith("invoice-studio-") && key !== CACHE_NAME).map((key) => caches.delete(key))))
+      .then((keys) => Promise.all(keys.filter((key) => key.startsWith(CACHE_PREFIX) && key !== CACHE_NAME).map((key) => caches.delete(key))))
       .then(() => self.clients.claim()),
   );
+});
+
+self.addEventListener("message", (event) => {
+  if (event.data?.type === "SKIP_WAITING") self.skipWaiting();
 });
 
 self.addEventListener("fetch", (event) => {
@@ -31,20 +99,13 @@ self.addEventListener("fetch", (event) => {
   const requestUrl = new URL(event.request.url);
   if (requestUrl.origin !== self.location.origin) return;
 
-  event.respondWith(
-    fetch(event.request)
-      .then((response) => {
-        if (response && response.status === 200) {
-          const copy = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
-        }
-        return response;
-      })
-      .catch(async () => {
-        const cached = await caches.match(event.request);
-        if (cached) return cached;
-        if (event.request.mode === "navigate") return caches.match("./index.html");
-        return Response.error();
-      }),
-  );
+  if (event.request.mode === "navigate") {
+    // Authentication callbacks may carry credentials in the query string. They
+    // must never become Cache Storage keys or fall back to a cached callback.
+    event.respondWith(requestUrl.search ? fetch(event.request) : fetchNavigation(event));
+    return;
+  }
+
+  if (!isAppShellRequest(requestUrl)) return;
+  event.respondWith(fetchShellRequest(event));
 });

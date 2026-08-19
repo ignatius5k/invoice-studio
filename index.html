@@ -5,16 +5,16 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="theme-color" content="#f2f3f5" />
     <meta name="description" content="Create, save, edit, and duplicate print-ready Eng Hoon Residences invoices." />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self'; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' https://*.supabase.co wss://*.supabase.co; img-src 'self'; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'" />
     <link rel="manifest" href="./manifest.webmanifest" />
     <link rel="icon" href="./icon-192.png" />
     <link rel="apple-touch-icon" href="./icon-192.png" />
-    <link rel="stylesheet" href="./styles.css?v=25" />
+    <link rel="stylesheet" href="./styles.css?v=27" />
     <title>Invoice Studio</title>
   </head>
   <body>
     <div id="offlineBanner" class="offline-banner" role="status" hidden>
-      You are offline. Your draft is saved on this device and printing still works.
+      You are offline. Reconnect to load or save account data. Printing the open invoice still works.
     </div>
 
     <header class="app-header">
@@ -26,18 +26,74 @@
         </div>
       </div>
       <div class="header-actions">
-        <button id="invoiceListButton" class="button button-secondary" type="button" hidden>Back</button>
         <button id="installButton" class="button button-secondary" type="button" hidden>Install app</button>
+        <button id="invoiceListButton" class="button button-secondary" type="button" hidden>Back</button>
         <button id="newInvoiceButton" class="button button-secondary" type="button" hidden>New invoice</button>
         <button id="printButton" class="button button-primary" type="button" hidden>Save invoice</button>
+        <div id="accountControls" class="account-controls" hidden>
+          <div class="account-identity">
+            <span id="accountEmail" class="account-email"></span>
+            <span id="syncStatus" class="sync-status" role="status" aria-live="polite">All changes synced</span>
+          </div>
+          <button id="signOutButton" class="button button-secondary" type="button">Sign out</button>
+        </div>
       </div>
     </header>
 
-    <main id="invoiceListPage" class="history-page" aria-labelledby="invoiceListTitle">
+    <main id="authPage" class="auth-page" aria-labelledby="authTitle">
+      <section class="auth-card">
+        <div id="authConfigurationState" hidden>
+          <p class="auth-label">Setup required</p>
+          <h1 id="configurationTitle">Connect Supabase</h1>
+          <p>Add your Supabase project URL and publishable key to <code>supabase-config.js</code>, then reload the app.</p>
+          <p class="auth-help">Run the included SQL migration first so authentication and row-level security are ready.</p>
+        </div>
+
+        <div id="authSignInState">
+          <p class="auth-label">Invoice Studio</p>
+          <h1 id="authTitle">Sign in</h1>
+          <p class="auth-intro">Access invoices and drafts synced to your account.</p>
+          <form id="authForm" class="auth-form">
+            <div class="field-stack">
+              <label for="authEmail">Email address</label>
+              <input id="authEmail" name="email" type="email" autocomplete="email" required />
+            </div>
+            <div class="field-stack">
+              <label for="authPassword">Password</label>
+              <input id="authPassword" name="password" type="password" autocomplete="current-password" minlength="6" required />
+            </div>
+            <div class="auth-primary-actions">
+              <button id="signInButton" class="button button-primary" type="submit">Sign in</button>
+              <button id="createAccountButton" class="button button-secondary" type="button">Create account</button>
+            </div>
+            <button id="forgotPasswordButton" class="auth-text-button" type="button">Forgot password?</button>
+          </form>
+        </div>
+
+        <form id="passwordRecoveryForm" class="auth-form" hidden>
+          <p class="auth-label">Account recovery</p>
+          <h1 id="recoveryTitle">Set a new password</h1>
+          <p class="auth-intro">Choose a password with at least 6 characters.</p>
+          <div class="field-stack">
+            <label for="recoveryPassword">New password</label>
+            <input id="recoveryPassword" type="password" autocomplete="new-password" minlength="6" required />
+          </div>
+          <div class="field-stack">
+            <label for="recoveryPasswordConfirm">Confirm new password</label>
+            <input id="recoveryPasswordConfirm" type="password" autocomplete="new-password" minlength="6" required />
+          </div>
+          <button id="updatePasswordButton" class="button button-primary" type="submit">Update password</button>
+        </form>
+
+        <p id="authMessage" class="auth-message" role="status" aria-live="polite"></p>
+      </section>
+    </main>
+
+    <main id="invoiceListPage" class="history-page" aria-labelledby="invoiceListTitle" hidden>
       <section class="history-hero">
         <div>
           <h1 id="invoiceListTitle" tabindex="-1">Invoices</h1>
-          <p class="history-intro">Create, edit, and duplicate invoices saved on this device.</p>
+          <p class="history-intro">Create, edit, and duplicate invoices synced to your account.</p>
         </div>
         <button id="historyNewInvoiceButton" class="button button-primary" type="button">Create invoice</button>
       </section>
@@ -54,7 +110,7 @@
         </div>
       </aside>
 
-      <section class="history-section" aria-labelledby="savedInvoicesTitle">
+      <section id="historySection" class="history-section" aria-labelledby="savedInvoicesTitle" aria-busy="false">
         <div class="history-section-heading">
           <div>
             <h2 id="savedInvoicesTitle">Saved invoices</h2>
@@ -69,6 +125,13 @@
 
         <div id="invoiceHistoryList" class="invoice-history-list"></div>
 
+        <p id="historyLoadingState" class="history-feedback" role="status" aria-live="polite" hidden>Loading invoices...</p>
+
+        <div id="historyErrorState" class="history-feedback history-error" role="alert" hidden>
+          <p>Invoices could not be loaded. Check your connection and try again.</p>
+          <button id="retryHistoryButton" class="button button-secondary" type="button">Try again</button>
+        </div>
+
         <div id="historyEmptyState" class="history-empty-state">
           <h2>No saved invoices yet</h2>
           <p>Your saved invoices will appear here, ready to edit or duplicate.</p>
@@ -79,8 +142,12 @@
           <h2>No matching invoices</h2>
           <p>Try a different invoice number or customer name.</p>
         </div>
+
+        <div class="history-pagination">
+          <button id="loadMoreInvoicesButton" class="button button-secondary" type="button" hidden>Load more</button>
+        </div>
       </section>
-      <p class="history-storage-note">Invoices are stored only in this browser on this device.</p>
+      <p class="history-storage-note">Invoices and drafts are protected by your account and stored in Supabase.</p>
     </main>
 
     <main id="editorPage" class="workspace" hidden>
@@ -98,7 +165,7 @@
             <legend>Invoice details</legend>
             <div class="field-stack">
               <label for="invoiceNumber">Invoice number</label>
-              <input id="invoiceNumber" name="invoiceNumber" data-field="invoiceNumber" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" required />
+              <input id="invoiceNumber" name="invoiceNumber" data-field="invoiceNumber" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="120" required />
             </div>
             <div class="field-grid field-grid-two">
               <div class="field-stack">
@@ -112,7 +179,7 @@
             </div>
             <div class="field-stack">
               <label for="pdfFileName">PDF file name <span class="optional-label">(optional)</span></label>
-              <input id="pdfFileName" name="pdfFileName" data-field="pdfFileName" type="text" autocomplete="off" aria-describedby="pdfFileNameHelp" />
+              <input id="pdfFileName" name="pdfFileName" data-field="pdfFileName" type="text" autocomplete="off" maxlength="120" aria-describedby="pdfFileNameHelp" />
               <p id="pdfFileNameHelp" class="field-help">File name used when you choose Save as PDF. The .pdf extension is added automatically.</p>
             </div>
           </fieldset>
@@ -121,7 +188,7 @@
             <legend>Bill to</legend>
             <div class="field-stack">
               <label for="billTo">Customer or company name</label>
-              <textarea id="billTo" name="billTo" data-field="billTo" rows="2" aria-describedby="billToHelp" required></textarea>
+              <textarea id="billTo" name="billTo" data-field="billTo" rows="2" maxlength="2000" aria-describedby="billToHelp" required></textarea>
               <p id="billToHelp" class="field-help">This appears in the invoice's BILL TO section.</p>
             </div>
           </fieldset>
@@ -252,6 +319,45 @@
       </section>
     </main>
 
+    <dialog id="legacyMigrationDialog" class="output-dialog legacy-migration-dialog" aria-labelledby="legacyMigrationTitle" aria-describedby="legacyMigrationDescription">
+      <div class="output-dialog-card">
+        <p class="auth-label">Local data found</p>
+        <h2 id="legacyMigrationTitle">Choose what happens to these invoices</h2>
+        <p id="legacyMigrationDescription" class="output-dialog-description">This browser contains invoice data from before accounts were introduced. It will not be added to an account without your choice.</p>
+        <div class="output-file-summary legacy-migration-summary">
+          <span>Found on this browser</span>
+          <strong id="legacyMigrationSummary"></strong>
+          <span>Signed-in destination</span>
+          <strong id="legacyMigrationDestination"></strong>
+        </div>
+        <p id="legacyMigrationMessage" class="auth-message" role="status" aria-live="polite"></p>
+        <div class="legacy-migration-actions">
+          <button id="moveLegacyDataButton" class="button button-primary" type="button">Move to this account</button>
+          <button id="exportLegacyDataButton" class="button button-secondary" type="button">Export a backup</button>
+          <button id="discardLegacyDataButton" class="button button-danger" type="button">Discard local copy</button>
+          <button id="cancelLegacyMigrationButton" class="button button-secondary" type="button">Cancel sign-in</button>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog id="draftConflictDialog" class="output-dialog draft-conflict-dialog" aria-labelledby="draftConflictTitle" aria-describedby="draftConflictDescription">
+      <div class="output-dialog-card">
+        <p class="auth-label">Draft sync conflict</p>
+        <h2 id="draftConflictTitle">Choose which draft to keep</h2>
+        <p id="draftConflictDescription" class="output-dialog-description">This device and your account both have draft changes. Nothing will be overwritten until you choose.</p>
+        <div class="output-file-summary">
+          <span>This device</span>
+          <strong id="localDraftConflictSummary"></strong>
+          <span>Cloud account</span>
+          <strong id="cloudDraftConflictSummary"></strong>
+        </div>
+        <div class="legacy-migration-actions">
+          <button id="keepLocalDraftButton" class="button button-primary" type="button">Keep this device draft</button>
+          <button id="keepCloudDraftButton" class="button button-secondary" type="button">Use cloud draft</button>
+        </div>
+      </div>
+    </dialog>
+
     <dialog id="outputDialog" class="output-dialog" aria-labelledby="outputDialogTitle" aria-describedby="outputDialogDescription">
       <div class="output-dialog-card">
         <button id="closeOutputDialogButton" class="dialog-close-button" type="button" aria-label="Close output options">&times;</button>
@@ -277,7 +383,10 @@
 
     <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
     <noscript>This app needs JavaScript to create invoices.</noscript>
-    <script src="./vendor/html2pdf.bundle.min.js?v=25" defer></script>
-    <script src="./app.js?v=25" defer></script>
+    <script src="./vendor/supabase.js?v=27" defer></script>
+    <script src="./supabase-config.js?v=27" defer></script>
+    <script src="./backend.js?v=27" defer></script>
+    <script src="./outbox.js?v=27" defer></script>
+    <script src="./app.js?v=27" defer></script>
   </body>
 </html>

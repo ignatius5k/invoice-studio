@@ -1,0 +1,106 @@
+name: Verify
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - staging
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  database:
+    name: Supabase migration and RLS
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install pinned Supabase CLI
+        uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520 # v3
+        with:
+          version: 2.115.0
+
+      - name: Start local database and apply migrations
+        run: supabase db start
+
+      - name: Rebuild the database from migrations
+        run: supabase db reset
+
+      - name: Lint the local database
+        run: supabase db lint --local --level warning --fail-on error
+
+      - name: Test database policies and constraints
+        run: supabase test db --local
+
+      - name: Stop the local database
+        if: always()
+        run: supabase stop --no-backup
+
+  verify:
+    name: Application and infrastructure
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install pinned Node and npm
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Verify exact npm version
+        run: |
+          npm install --global npm@11.17.0
+          test "$(npm --version)" = "11.17.0"
+
+      - name: Install locked dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Require Chrome browser coverage
+        run: |
+          chrome_path="$(command -v google-chrome || command -v google-chrome-stable || true)"
+          test -n "$chrome_path"
+          "$chrome_path" --version
+          echo "CHROME_PATH=$chrome_path" >> "$GITHUB_ENV"
+
+      - name: Check JavaScript syntax
+        run: npm run check
+
+      - name: Verify vendored dependencies
+        run: npm run verify:vendor
+
+      - name: Run application and infrastructure tests
+        run: npm test
+
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Smoke-test production build
+        env:
+          SUPABASE_URL: https://ci-build.invalid.supabase.co
+          SUPABASE_PUBLISHABLE_KEY: sb_publishable_ci_build_only
+        run: |
+          npm run build
+          test -f dist/index.html
+          test -f dist/_headers
+          test -f dist/supabase-config.js
+          grep -F "https://ci-build.invalid.supabase.co" dist/supabase-config.js
+          grep -F "frame-ancestors 'none'" dist/_headers
+
+      - name: Reject whitespace errors and generated changes
+        run: |
+          git diff --check
+          git diff --exit-code

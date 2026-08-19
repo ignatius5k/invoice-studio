@@ -233,6 +233,145 @@ textarea[aria-invalid="true"] {
   background: #fff5f5;
 }
 
+.account-controls {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.account-identity {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.account-email {
+  max-width: 220px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sync-status {
+  max-width: 240px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sync-status[data-state="waiting"],
+.sync-status[data-state="syncing"] {
+  color: var(--accent-dark);
+}
+
+.sync-status[data-state="error"],
+.sync-status[data-state="conflict"] {
+  color: var(--danger);
+}
+
+.auth-page {
+  display: grid;
+  min-height: calc(100dvh - 72px);
+  padding: 40px 20px;
+  place-items: center;
+}
+
+.auth-card {
+  width: min(460px, 100%);
+  padding: 30px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-panel);
+  background: var(--paper);
+}
+
+.auth-label,
+.auth-intro,
+.auth-help,
+.auth-message {
+  margin: 0;
+}
+
+.auth-label {
+  color: var(--accent-dark);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.auth-card h1 {
+  margin: 5px 0 0;
+  font-size: 30px;
+  letter-spacing: -0.035em;
+}
+
+.auth-intro,
+.auth-card > div > p:not(.auth-label),
+.auth-help {
+  margin-top: 9px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.auth-form {
+  display: grid;
+  gap: 16px;
+  margin-top: 22px;
+}
+
+.auth-form .field-stack {
+  margin-top: 0;
+}
+
+.auth-primary-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 9px;
+}
+
+.auth-primary-actions .button,
+.auth-form > .button {
+  width: 100%;
+}
+
+.auth-text-button {
+  justify-self: start;
+  min-height: 44px;
+  padding: 8px 0;
+  color: var(--accent-dark);
+  border: 0;
+  background: transparent;
+  font-size: 13px;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.auth-message {
+  min-height: 20px;
+  margin-top: 18px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.auth-message[data-state="error"] {
+  color: var(--danger);
+}
+
+.auth-card code {
+  padding: 2px 4px;
+  border-radius: 4px;
+  background: var(--workspace);
+  font-size: 0.9em;
+}
+
 .history-page {
   width: min(1120px, calc(100% - 48px));
   margin: 0 auto;
@@ -354,6 +493,37 @@ textarea[aria-invalid="true"] {
 
 .invoice-history-list {
   display: grid;
+}
+
+.history-feedback {
+  margin: 0;
+  padding: 22px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.history-error {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+}
+
+.history-error p {
+  margin: 0;
+}
+
+.history-pagination {
+  display: flex;
+  justify-content: center;
+  padding: 0 20px 20px;
+}
+
+.history-pagination:empty {
+  display: none;
+}
+
+.history-pagination .button {
+  min-width: 150px;
 }
 
 .invoice-record {
@@ -836,7 +1006,7 @@ h1 {
   width: 20.6mm;
   height: auto;
   margin-top: -2mm;
-  margin-right: 5.7mm;
+  margin-right: 0;
   object-fit: contain;
 }
 
@@ -937,7 +1107,13 @@ h1 {
 }
 
 .invoice-table tfoot th {
+  padding-right: 0;
   text-align: right;
+}
+
+.invoice-table tfoot td:first-of-type {
+  padding-right: 0;
+  text-align: center;
 }
 
 .invoice-table tfoot td:last-child {
@@ -1094,6 +1270,37 @@ h1 {
   background: #17191c;
 }
 
+.legacy-migration-dialog {
+  width: min(590px, calc(100vw - 28px));
+}
+
+.legacy-migration-dialog .auth-label {
+  margin-bottom: 6px;
+}
+
+.legacy-migration-dialog h2 {
+  max-width: 470px;
+}
+
+.legacy-migration-summary {
+  gap: 5px;
+}
+
+.legacy-migration-summary strong + span {
+  margin-top: 8px;
+}
+
+.legacy-migration-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.legacy-migration-actions .button {
+  width: 100%;
+}
+
 .output-option-primary:hover {
   background: #30343a;
 }
@@ -1183,9 +1390,15 @@ noscript {
   }
 
   .brand-subtitle,
+  .account-email,
   #newInvoiceButton,
   #printButton {
     display: none;
+  }
+
+  .sync-status {
+    max-width: 112px;
+    font-size: 10px;
   }
 
   .brand-lockup img {
@@ -1210,6 +1423,15 @@ noscript {
 }
 
 @media (max-width: 700px) {
+  .auth-page {
+    align-items: start;
+    padding: 24px 14px;
+  }
+
+  .auth-card {
+    padding: 24px 20px;
+  }
+
   .history-page {
     width: min(1120px, calc(100% - 28px));
     padding: 28px 0 24px;
@@ -1410,6 +1632,20 @@ noscript {
   .output-dialog-card {
     padding: 22px 18px 18px;
   }
+
+  .legacy-migration-actions {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 420px) {
+  .brand-lockup > div {
+    display: none;
+  }
+
+  .auth-primary-actions {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 340px) {
@@ -1443,6 +1679,7 @@ noscript {
 
   .app-header,
   .offline-banner,
+  .auth-page,
   .history-page,
   .editor-panel,
   .preview-toolbar,
