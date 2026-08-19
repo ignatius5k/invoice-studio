@@ -10,6 +10,7 @@ const STATIC_FILES = [
   "styles.css",
   "app.js",
   "backend.js",
+  "feature-flags.js",
   "outbox.js",
   "sw.js",
   "manifest.webmanifest",

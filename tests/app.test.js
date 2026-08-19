@@ -91,17 +91,82 @@ async function evaluate(cdp, expression) {
   return result.result.value;
 }
 
-test("invoice editor behavior, responsive layout, draft, print, and offline shell", async (context) => {
-  let chromePath;
+async function findChromePath() {
   for (const candidate of CHROME_CANDIDATES) {
     try {
       await stat(candidate);
-      chromePath = candidate;
-      break;
+      return candidate;
     } catch {
       // Try the next common browser path.
     }
   }
+  return undefined;
+}
+
+test("temporary guest mode opens the local workspace without showing login", async (context) => {
+  const chromePath = await findChromePath();
+  if (!chromePath) return context.skip("Set CHROME_PATH to run browser coverage");
+
+  const server = await startServer();
+  const address = server.address();
+  const appUrl = `http://127.0.0.1:${address.port}/`;
+  const profile = await mkdtemp(join(tmpdir(), "invoice-studio-guest-test-"));
+  const chrome = spawn(chromePath, [
+    "--headless=new",
+    "--remote-debugging-port=0",
+    `--user-data-dir=${profile}`,
+    "--no-first-run",
+    "--disable-gpu",
+    appUrl,
+  ], { stdio: ["ignore", "ignore", "pipe"] });
+
+  context.after(async () => {
+    chrome.kill();
+    server.close();
+    await Promise.race([
+      new Promise((resolve) => chrome.once("exit", resolve)),
+      new Promise((resolve) => setTimeout(resolve, 1500)),
+    ]);
+    await rm(profile, { recursive: true, force: true, maxRetries: 8, retryDelay: 150 });
+  });
+
+  let debugOutput = "";
+  chrome.stderr.setEncoding("utf8");
+  chrome.stderr.on("data", (chunk) => { debugOutput += chunk; });
+  const browserSocket = await waitFor(() => debugOutput.match(/DevTools listening on (ws:\/\/[^\s]+)/)?.[1]);
+  const browser = await connectCdp(browserSocket);
+  context.after(() => browser.close());
+  const response = await fetch(`http://127.0.0.1:${new URL(browserSocket).port}/json/list`);
+  const pages = await response.json();
+  const pageTarget = await waitFor(() => pages.find((candidate) => candidate.type === "page" && candidate.url === appUrl));
+  const page = await connectCdp(pageTarget.webSocketDebuggerUrl);
+  context.after(() => page.close());
+  await page.send("Runtime.enable");
+  await page.send("Page.enable");
+  await waitFor(() => evaluate(page, "document.readyState === 'complete' && document.body.dataset.page === 'history'"));
+
+  const state = JSON.parse(await evaluate(page, `JSON.stringify({
+    guestMode: window.invoiceBackend.guestMode,
+    authHidden: document.querySelector('#authPage').hidden,
+    historyVisible: !document.querySelector('#invoiceListPage').hidden,
+    accountLabel: document.querySelector('#accountEmail').textContent,
+    signOutHidden: document.querySelector('#signOutButton').hidden,
+    syncStatus: document.querySelector('#syncStatus').textContent,
+    storageNote: document.querySelector('.history-storage-note').textContent
+  })`));
+  assert.deepEqual(state, {
+    guestMode: true,
+    authHidden: true,
+    historyVisible: true,
+    accountLabel: "Local guest",
+    signOutHidden: true,
+    syncStatus: "Saved on this device",
+    storageNote: "Temporary guest mode: invoices and drafts stay in this browser and are not synced to another device.",
+  });
+});
+
+test("invoice editor behavior, responsive layout, draft, print, and offline shell", async (context) => {
+  const chromePath = await findChromePath();
   if (!chromePath) return context.skip("Set CHROME_PATH to run browser coverage");
 
   const server = await startServer();
@@ -144,11 +209,12 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
   await page.send("Page.enable");
   const backendMock = await readFile(join(ROOT, "tests", "browser-backend-mock.js"), "utf8");
   await page.send("Page.addScriptToEvaluateOnNewDocument", { source: backendMock });
+  await evaluate(page, "localStorage.clear(); true");
   await page.send("Page.reload", { ignoreCache: true });
-  await waitFor(() => evaluate(page, "document.readyState === 'complete' && document.body.dataset.page === 'history' && document.querySelectorAll('.item-row').length === 1"));
+  await waitFor(() => evaluate(page, "document.readyState === 'complete' && document.body.dataset.page === 'history' && document.querySelectorAll('.item-row').length === 1"), 8000);
 
   await evaluate(page, "localStorage.clear(); location.reload(); true");
-  await waitFor(() => evaluate(page, "document.readyState === 'complete' && document.body.dataset.page === 'history' && document.querySelectorAll('.item-row').length === 1"));
+  await waitFor(() => evaluate(page, "document.readyState === 'complete' && document.body.dataset.page === 'history' && document.querySelectorAll('.item-row').length === 1"), 8000);
   const landingState = JSON.parse(await evaluate(page, `JSON.stringify({
     page: document.body.dataset.page,
     historyVisible: !document.querySelector('#invoiceListPage').hidden,
@@ -720,7 +786,7 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
   await waitFor(() => evaluate(page, "typeof window.html2pdf === 'function'"));
   assert.equal(
     await evaluate(page, "document.querySelector('script[data-pdf-library=\"html2pdf\"]')?.getAttribute('src')"),
-    "./vendor/html2pdf.bundle.min.js?v=27",
+    "./vendor/html2pdf.bundle.min.js?v=29",
   );
   await waitFor(async () => {
     try {
@@ -1198,12 +1264,12 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
   assert.match(backendSource, /\.eq\("revision", expectedRevision\)/);
   assert.match(backendSource, /error\.code = "INVOICE_REVISION_CONFLICT"/);
 
-  const cacheReady = await waitFor(() => evaluate(page, "caches.keys().then(keys => keys.includes('invoice-studio-v28'))"));
+  const cacheReady = await waitFor(() => evaluate(page, "caches.keys().then(keys => keys.includes('invoice-studio-v29'))"));
   assert.equal(cacheReady, true);
   const workerSource = await readFile(join(ROOT, "sw.js"), "utf8");
   const handlers = {};
   const deletedCaches = [];
-  const cacheKeys = ["invoice-studio-v1", "invoice-studio-v27", "invoice-studio-v28", "unrelated-app-cache"];
+  const cacheKeys = ["invoice-studio-v1", "invoice-studio-v27", "invoice-studio-v28", "invoice-studio-v29", "unrelated-app-cache"];
   const workerContext = {
     URL,
     Response,
@@ -1221,7 +1287,7 @@ test("invoice editor behavior, responsive layout, draft, print, and offline shel
   let activation;
   handlers.activate({ waitUntil: (promise) => { activation = promise; } });
   await activation;
-  assert.deepEqual(deletedCaches, ["invoice-studio-v1", "invoice-studio-v27"]);
+  assert.deepEqual(deletedCaches, ["invoice-studio-v1", "invoice-studio-v27", "invoice-studio-v28"]);
 
   if (!await evaluate(page, "Boolean(navigator.serviceWorker.controller)")) {
     await page.send("Page.reload", { ignoreCache: true });

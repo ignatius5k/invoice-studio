@@ -58,6 +58,8 @@ supabase stop --no-backup
 
 ## Build and deploy
 
+Temporary guest access is controlled by `temporaryGuestMode` in `feature-flags.js`. While it is `true`, the app skips Supabase Auth and keeps invoices only in that browser. Set it to `false` to restore sign-in; the next signed-in session will offer to move the browser invoices into the account.
+
 Tracked `supabase-config.js` contains the development project's browser-safe URL and publishable key. A deployable artifact is still generated from environment-specific public configuration:
 
 ```sh

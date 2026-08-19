@@ -9,7 +9,7 @@ const MAX_ITEM_DESCRIPTION_LENGTH = 1000;
 const MAX_BILL_TO_LENGTH = 2000;
 const HISTORY_PAGE_SIZE = 25;
 const DRAFT_RETRY_MAX_DELAY = 30000;
-const PDF_LIBRARY_URL = "./vendor/html2pdf.bundle.min.js?v=27";
+const PDF_LIBRARY_URL = "./vendor/html2pdf.bundle.min.js?v=29";
 const backend = window.invoiceBackend;
 const draftOutbox = window.invoiceDraftOutbox;
 
@@ -69,6 +69,8 @@ const accountControls = document.querySelector("#accountControls");
 const accountEmail = document.querySelector("#accountEmail");
 const syncStatus = document.querySelector("#syncStatus");
 const signOutButton = document.querySelector("#signOutButton");
+const historyIntro = document.querySelector(".history-intro");
+const historyStorageNote = document.querySelector(".history-storage-note");
 const legacyMigrationDialog = document.querySelector("#legacyMigrationDialog");
 const legacyMigrationSummary = document.querySelector("#legacyMigrationSummary");
 const legacyMigrationDestination = document.querySelector("#legacyMigrationDestination");
@@ -428,6 +430,7 @@ function setLegacyMigrationBusy(isBusy) {
 }
 
 function promptForLegacyMigration(session) {
+  if (backend.guestMode) return Promise.resolve("none");
   const legacy = legacyStorageData();
   if (!legacy.present) return Promise.resolve("none");
 
@@ -477,7 +480,12 @@ async function cancelLegacyMigration() {
 }
 
 function setDraftSyncStatus(stateName, message) {
-  syncStatus.textContent = message;
+  let visibleMessage = message;
+  if (backend.guestMode) {
+    if (stateName === "syncing") visibleMessage = "Saving on this device...";
+    if (stateName === "waiting" || stateName === "synced") visibleMessage = "Saved on this device";
+  }
+  syncStatus.textContent = visibleMessage;
   syncStatus.dataset.state = stateName;
 }
 
@@ -612,7 +620,7 @@ async function runDraftOutboxSync(force = false) {
     setDraftSyncStatus("synced", "All changes synced");
     return true;
   }
-  if (!navigator.onLine) {
+  if (!backend.guestMode && !navigator.onLine) {
     setDraftSyncStatus("waiting", "Saved on this device. Waiting to sync");
     return false;
   }
@@ -780,7 +788,15 @@ async function loadAuthenticatedWorkspace(session) {
   workspaceLoading = true;
   if (currentUser?.id && currentUser.id !== session.user.id) neutralizeDraftWrites();
   currentUser = session.user;
-  accountEmail.textContent = session.user.email || "Signed in";
+  accountEmail.textContent = backend.guestMode ? "Local guest" : (session.user.email || "Signed in");
+  signOutButton.hidden = Boolean(backend.guestMode);
+  historyIntro.textContent = backend.guestMode
+    ? "Create, edit, and duplicate invoices saved on this device."
+    : "Create, edit, and duplicate invoices synced to your account.";
+  historyStorageNote.textContent = backend.guestMode
+    ? "Temporary guest mode: invoices and drafts stay in this browser and are not synced to another device."
+    : "Invoices and drafts are protected by your account and stored in Supabase.";
+  if (backend.guestMode) setDraftSyncStatus("synced", "Saved on this device");
   accountControls.hidden = false;
   authPage.hidden = false;
   setAuthMessage("Loading your invoices...");
@@ -811,7 +827,9 @@ async function loadAuthenticatedWorkspace(session) {
     authPage.hidden = true;
     showInvoiceList(false);
     flushDraftOutbox();
-    if (migrationAction === "moved") showToast("Existing browser invoices were moved to your account.");
+    if (migrationAction === "moved") showToast(backend.guestMode
+      ? "Existing browser invoices are ready to use."
+      : "Existing browser invoices were moved to your account.");
     if (migrationAction === "discarded") showToast("Local browser data was discarded without moving it.");
   } catch (error) {
     try {
@@ -1927,8 +1945,8 @@ function setPreviewScaleMode(mode) {
 }
 
 function updateConnectionStatus() {
-  offlineBanner.hidden = navigator.onLine;
-  if (navigator.onLine) {
+  offlineBanner.hidden = navigator.onLine || backend.guestMode;
+  if (navigator.onLine || backend.guestMode) {
     clearTimeout(draftRetryTimer);
     flushDraftOutbox({ force: true });
   } else if (currentUser) {

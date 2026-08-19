@@ -1,15 +1,16 @@
 const CACHE_PREFIX = "invoice-studio-";
-const CACHE_NAME = `${CACHE_PREFIX}v28`;
+const CACHE_NAME = `${CACHE_PREFIX}v29`;
 const APP_SHELL = [
   "./",
   "./index.html",
-  "./styles.css?v=27",
-  "./vendor/html2pdf.bundle.min.js?v=27",
-  "./vendor/supabase.js?v=27",
-  "./supabase-config.js?v=27",
-  "./backend.js?v=27",
-  "./outbox.js?v=27",
-  "./app.js?v=28",
+  "./styles.css?v=29",
+  "./vendor/html2pdf.bundle.min.js?v=29",
+  "./vendor/supabase.js?v=29",
+  "./feature-flags.js?v=29",
+  "./supabase-config.js?v=29",
+  "./backend.js?v=29",
+  "./outbox.js?v=29",
+  "./app.js?v=29",
   "./manifest.webmanifest",
   "./eng-hoon-residences-logo.png",
   "./icon-192.png",
