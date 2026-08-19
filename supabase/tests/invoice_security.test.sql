@@ -301,9 +301,9 @@ select throws_ok(
 reset role;
 select set_config('request.jwt.claim.sub', '11111111-1111-4111-8111-111111111111', true);
 set local role authenticated;
-select like(
+select matches(
   public.next_invoice_number(date '2026-08-20'),
-  'EHR-20260820-%',
+  '^EHR-20260820-[0-9]{3}$',
   'invoice number allocation is scoped and formatted'
 );
 
