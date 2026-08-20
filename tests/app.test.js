@@ -218,6 +218,11 @@ test("guest entry, invoice editor, responsive layout, draft, print, and offline 
   const initial = JSON.parse(cleanDraft);
   assert.match(initial.invoiceNumber, /^EHR-\d{8}-001$/);
   assert.equal(initial.pdfFileName, initial.invoiceNumber);
+  assert.deepEqual(JSON.parse(await evaluate(page, `JSON.stringify({
+    checked: document.querySelector('#customizePdfFileName').checked,
+    readOnly: document.querySelector('#pdfFileName').readOnly,
+    ariaReadOnly: document.querySelector('#pdfFileName').getAttribute('aria-readonly')
+  })`)), { checked: false, readOnly: true, ariaReadOnly: "true" });
   assert.match(initial.invoiceDate, /^\d{4}-\d{2}-\d{2}$/);
   assert.equal(initial.invoiceDate, initial.today);
   assert.match(initial.dueDate, /^\d{4}-\d{2}-\d{2}$/);
@@ -297,13 +302,35 @@ test("guest entry, invoice editor, responsive layout, draft, print, and offline 
   const filenameBehavior = JSON.parse(await evaluate(page, `(() => {
     const number = document.querySelector('#invoiceNumber');
     const filename = document.querySelector('#pdfFileName');
+    const toggle = document.querySelector('#customizePdfFileName');
+    const initiallyLocked = filename.readOnly;
     number.value = 'inv-sync-1'; number.dispatchEvent(new Event('input', { bubbles: true }));
     const synced = filename.value;
+    toggle.checked = true; toggle.dispatchEvent(new Event('change', { bubbles: true }));
+    const editable = !filename.readOnly;
     filename.value = 'Client custom'; filename.dispatchEvent(new Event('input', { bubbles: true }));
     number.value = 'inv-sync-2'; number.dispatchEvent(new Event('input', { bubbles: true }));
-    return JSON.stringify({ number: number.value, synced, customized: filename.value, autocapitalize: number.autocapitalize, spellcheck: number.spellcheck });
+    const customized = filename.value;
+    toggle.checked = false; toggle.dispatchEvent(new Event('change', { bubbles: true }));
+    const lockedReset = filename.value;
+    const locked = filename.readOnly;
+    toggle.checked = true; toggle.dispatchEvent(new Event('change', { bubbles: true }));
+    filename.value = 'Client custom'; filename.dispatchEvent(new Event('input', { bubbles: true }));
+    return JSON.stringify({ number: number.value, synced, customized, initiallyLocked, editable, lockedReset, locked, checked: toggle.checked, help: document.querySelector('#pdfFileNameHelp').textContent, autocapitalize: number.autocapitalize, spellcheck: number.spellcheck });
   })()`));
-  assert.deepEqual(filenameBehavior, { number: "INV-SYNC-2", synced: "INV-SYNC-1", customized: "Client custom", autocapitalize: "characters", spellcheck: false });
+  assert.deepEqual(filenameBehavior, {
+    number: "INV-SYNC-2",
+    synced: "INV-SYNC-1",
+    customized: "Client custom",
+    initiallyLocked: true,
+    editable: true,
+    lockedReset: "INV-SYNC-2",
+    locked: true,
+    checked: true,
+    help: "Custom file name used when you choose Save as PDF. The .pdf extension is added automatically.",
+    autocapitalize: "characters",
+    spellcheck: false,
+  });
 
   const uppercaseName = JSON.parse(await evaluate(page, `(() => {
     const customer = document.querySelector('#billTo');
@@ -337,6 +364,20 @@ test("guest entry, invoice editor, responsive layout, draft, print, and offline 
       headingGap: parseFloat(getComputedStyle(document.querySelector('.panel-heading')).rowGap),
       previewJumpVisible: getComputedStyle(document.querySelector('#mobileViewPreviewButton')).display !== 'none',
       mobileActionsVisible: getComputedStyle(document.querySelector('.mobile-output-action')).display !== 'none',
+      filenameControl: (() => {
+        const section = document.querySelector('#pdfFileName').closest('.form-section').getBoundingClientRect();
+        const field = document.querySelector('#pdfFileName').getBoundingClientRect();
+        const toggleLabel = document.querySelector('.checkbox-control').getBoundingClientRect();
+        return {
+          fieldLeft: field.left,
+          fieldRight: field.right,
+          sectionLeft: section.left,
+          sectionRight: section.right,
+          toggleLeft: toggleLabel.left,
+          toggleRight: toggleLabel.right,
+          toggleHeight: toggleLabel.height
+        };
+      })(),
       mobileLabels: [...document.querySelectorAll('.mobile-field-label')].map(label => ({
         text: label.textContent,
         visible: getComputedStyle(label).display !== 'none',
@@ -378,6 +419,11 @@ test("guest entry, invoice editor, responsive layout, draft, print, and offline 
     assert.equal(measured.workspaceColumns, width <= 1200 ? 1 : 2, `${width}px workspace column count`);
     assert.equal(measured.previewJumpVisible, width <= 1200, `${width}px preview jump visibility`);
     assert.equal(measured.mobileActionsVisible, width <= 767, `${width}px mobile output visibility`);
+    assert.ok(measured.filenameControl.fieldLeft >= measured.filenameControl.sectionLeft - 1);
+    assert.ok(measured.filenameControl.fieldRight <= measured.filenameControl.sectionRight + 1);
+    assert.ok(measured.filenameControl.toggleLeft >= measured.filenameControl.sectionLeft - 1);
+    assert.ok(measured.filenameControl.toggleRight <= measured.filenameControl.sectionRight + 1);
+    assert.ok(measured.filenameControl.toggleHeight >= 44);
     if (width <= 1200) {
       assert.ok(measured.editorWidth <= 720.1, `${width}px editor should remain constrained`);
       assert.equal(measured.headingDirection, "column", `${width}px save status should group with heading`);
@@ -611,25 +657,25 @@ test("guest entry, invoice editor, responsive layout, draft, print, and offline 
     const before = filename.value;
     const number = document.querySelector('#invoiceNumber');
     number.value = 'INV-AFTER-RELOAD'; number.dispatchEvent(new Event('input', { bubbles: true }));
-    return JSON.stringify({ before, after: filename.value });
+    return JSON.stringify({ before, after: filename.value, checked: document.querySelector('#customizePdfFileName').checked, editable: !filename.readOnly });
   })()`));
-  assert.deepEqual(persistedCustomFilename, { before: "Client custom", after: "Client custom" });
+  assert.deepEqual(persistedCustomFilename, { before: "Client custom", after: "Client custom", checked: true, editable: true });
   await evaluate(page, `(() => {
-    const filename = document.querySelector('#pdfFileName');
-    filename.value = ''; filename.dispatchEvent(new Event('input', { bubbles: true }));
+    const toggle = document.querySelector('#customizePdfFileName');
+    toggle.checked = false; toggle.dispatchEvent(new Event('change', { bubbles: true }));
     window.dispatchEvent(new PageTransitionEvent('pagehide'));
     location.reload();
   })()`);
-  await waitFor(() => evaluate(page, "document.readyState === 'complete' && document.querySelector('#pdfFileName').value === document.querySelector('#invoiceNumber').value"));
+  await waitFor(() => evaluate(page, "document.readyState === 'complete' && document.querySelector('#pdfFileName').value === document.querySelector('#invoiceNumber').value && document.querySelector('#pdfFileName').readOnly"));
   await evaluate(page, "document.querySelector('#continueDraftButton').click(); true");
   const clearedFilenameBehavior = JSON.parse(await evaluate(page, `(() => {
     const number = document.querySelector('#invoiceNumber');
     const filename = document.querySelector('#pdfFileName');
     const reset = filename.value;
     number.value = 'INV-CLEAR-SYNC'; number.dispatchEvent(new Event('input', { bubbles: true }));
-    return JSON.stringify({ reset, numberBefore: 'INV-AFTER-RELOAD', synced: filename.value });
+    return JSON.stringify({ reset, numberBefore: 'INV-AFTER-RELOAD', synced: filename.value, checked: document.querySelector('#customizePdfFileName').checked, readOnly: filename.readOnly });
   })()`));
-  assert.deepEqual(clearedFilenameBehavior, { reset: "INV-AFTER-RELOAD", numberBefore: "INV-AFTER-RELOAD", synced: "INV-CLEAR-SYNC" });
+  assert.deepEqual(clearedFilenameBehavior, { reset: "INV-AFTER-RELOAD", numberBefore: "INV-AFTER-RELOAD", synced: "INV-CLEAR-SYNC", checked: false, readOnly: true });
 
   await evaluate(page, `(async () => {
     window.confirm = () => true;
@@ -852,7 +898,7 @@ test("guest entry, invoice editor, responsive layout, draft, print, and offline 
   await waitFor(() => evaluate(page, "typeof window.html2pdf === 'function'"));
   assert.equal(
     await evaluate(page, "document.querySelector('script[data-pdf-library=\"html2pdf\"]')?.getAttribute('src')"),
-    "./vendor/html2pdf.bundle.min.js?v=30",
+    "./vendor/html2pdf.bundle.min.js?v=31",
   );
   await waitFor(async () => {
     try {
@@ -1330,12 +1376,12 @@ test("guest entry, invoice editor, responsive layout, draft, print, and offline 
   assert.match(backendSource, /\.eq\("revision", expectedRevision\)/);
   assert.match(backendSource, /error\.code = "INVOICE_REVISION_CONFLICT"/);
 
-  const cacheReady = await waitFor(() => evaluate(page, "caches.keys().then(keys => keys.includes('invoice-studio-v30'))"));
+  const cacheReady = await waitFor(() => evaluate(page, "caches.keys().then(keys => keys.includes('invoice-studio-v31'))"));
   assert.equal(cacheReady, true);
   const workerSource = await readFile(join(ROOT, "sw.js"), "utf8");
   const handlers = {};
   const deletedCaches = [];
-  const cacheKeys = ["invoice-studio-v1", "invoice-studio-v27", "invoice-studio-v28", "invoice-studio-v29", "invoice-studio-v30", "unrelated-app-cache"];
+  const cacheKeys = ["invoice-studio-v1", "invoice-studio-v27", "invoice-studio-v28", "invoice-studio-v29", "invoice-studio-v30", "invoice-studio-v31", "unrelated-app-cache"];
   const workerContext = {
     URL,
     Response,
@@ -1353,7 +1399,7 @@ test("guest entry, invoice editor, responsive layout, draft, print, and offline 
   let activation;
   handlers.activate({ waitUntil: (promise) => { activation = promise; } });
   await activation;
-  assert.deepEqual(deletedCaches, ["invoice-studio-v1", "invoice-studio-v27", "invoice-studio-v28", "invoice-studio-v29"]);
+  assert.deepEqual(deletedCaches, ["invoice-studio-v1", "invoice-studio-v27", "invoice-studio-v28", "invoice-studio-v29", "invoice-studio-v30"]);
 
   if (!await evaluate(page, "Boolean(navigator.serviceWorker.controller)")) {
     await page.send("Page.reload", { ignoreCache: true });

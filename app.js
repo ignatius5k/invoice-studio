@@ -9,7 +9,7 @@ const MAX_ITEM_DESCRIPTION_LENGTH = 1000;
 const MAX_BILL_TO_LENGTH = 2000;
 const HISTORY_PAGE_SIZE = 25;
 const DRAFT_RETRY_MAX_DELAY = 30000;
-const PDF_LIBRARY_URL = "./vendor/html2pdf.bundle.min.js?v=30";
+const PDF_LIBRARY_URL = "./vendor/html2pdf.bundle.min.js?v=31";
 const backend = window.invoiceBackend;
 const draftOutbox = window.invoiceDraftOutbox;
 
@@ -39,6 +39,9 @@ const invoiceListButton = document.querySelector("#invoiceListButton");
 const newInvoiceButton = document.querySelector("#newInvoiceButton");
 const printButton = document.querySelector("#printButton");
 const editorTitle = document.querySelector("#editorTitle");
+const pdfFileNameInput = document.querySelector("#pdfFileName");
+const customizePdfFileName = document.querySelector("#customizePdfFileName");
+const pdfFileNameHelp = document.querySelector("#pdfFileNameHelp");
 const invoiceHistoryList = document.querySelector("#invoiceHistoryList");
 const historyEmptyState = document.querySelector("#historyEmptyState");
 const historyNoResults = document.querySelector("#historyNoResults");
@@ -129,12 +132,17 @@ function normalizeInvoiceData(value) {
   if (!value || !Array.isArray(value.items) || value.items.length === 0) return null;
   const invoiceNumber = String(value.invoiceNumber || "").toLocaleUpperCase("en-SG").slice(0, 120);
   const savedPdfFileName = String(value.pdfFileName || "").trim().slice(0, 120);
+  const pdfFileNameCustomized = typeof value.pdfFileNameCustomized === "boolean"
+    ? value.pdfFileNameCustomized
+    : Boolean(savedPdfFileName && savedPdfFileName !== invoiceNumber);
   return {
     historyId: typeof value.historyId === "string" ? value.historyId.slice(0, 160) : undefined,
     draftDirty: Boolean(value.draftDirty),
     invoiceNumber,
-    pdfFileName: savedPdfFileName || invoiceNumber || "invoice",
-    pdfFileNameCustomized: Boolean(savedPdfFileName && savedPdfFileName !== invoiceNumber),
+    pdfFileName: pdfFileNameCustomized
+      ? savedPdfFileName || invoiceNumber || "invoice"
+      : invoiceNumber || savedPdfFileName || "invoice",
+    pdfFileNameCustomized,
     invoiceDate: String(value.invoiceDate || ""),
     dueDate: String(value.dueDate || ""),
     billTo: String(value.billTo || "").toLocaleUpperCase("en-SG").slice(0, MAX_BILL_TO_LENGTH),
@@ -1103,6 +1111,7 @@ function invoiceFingerprint(invoice) {
   return JSON.stringify({
     invoiceNumber: invoice.invoiceNumber,
     pdfFileName: invoice.pdfFileName,
+    pdfFileNameCustomized: Boolean(invoice.pdfFileNameCustomized),
     invoiceDate: invoice.invoiceDate,
     dueDate: invoice.dueDate,
     billTo: invoice.billTo,
@@ -1366,8 +1375,19 @@ function fillForm() {
   for (const input of form.querySelectorAll("[data-field]")) {
     input.value = state[input.dataset.field] ?? "";
   }
+  updatePdfFileNameControl();
   renderItemsEditor();
   renderPreview();
+}
+
+function updatePdfFileNameControl() {
+  const isCustom = Boolean(state.pdfFileNameCustomized);
+  customizePdfFileName.checked = isCustom;
+  pdfFileNameInput.readOnly = !isCustom;
+  pdfFileNameInput.setAttribute("aria-readonly", String(!isCustom));
+  pdfFileNameHelp.textContent = isCustom
+    ? "Custom file name used when you choose Save as PDF. The .pdf extension is added automatically."
+    : "Matches the invoice number. Tick the checkbox to enter a custom PDF file name.";
 }
 
 function createField(className, label, input, id) {
@@ -1581,13 +1601,23 @@ function handleFieldInput(event) {
   }
   state[field] = event.target.value;
   if (field === "pdfFileName") {
-    state.pdfFileNameCustomized = Boolean(event.target.value.trim() && event.target.value !== state.invoiceNumber);
+    state.pdfFileNameCustomized = true;
   }
   if (field === "invoiceNumber" && !state.pdfFileNameCustomized) {
     state.pdfFileName = event.target.value;
     document.querySelector("#pdfFileName").value = event.target.value;
   }
   renderPreview();
+  saveDraft();
+}
+
+function togglePdfFileNameEditing() {
+  state.pdfFileNameCustomized = customizePdfFileName.checked;
+  if (!state.pdfFileNameCustomized) {
+    state.pdfFileName = state.invoiceNumber;
+    pdfFileNameInput.value = state.invoiceNumber;
+  }
+  updatePdfFileNameControl();
   saveDraft();
 }
 
@@ -1967,6 +1997,7 @@ function updateConnectionStatus() {
 }
 
 form.addEventListener("input", handleFieldInput);
+customizePdfFileName.addEventListener("change", togglePdfFileNameEditing);
 form.addEventListener("input", (event) => {
   if (event.target.matches("[required]") && event.target.validity.valid) clearFieldError(event.target);
   if (event.target.id === "invoiceDate" || event.target.id === "dueDate") {

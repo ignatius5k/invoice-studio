@@ -9,7 +9,7 @@
     <link rel="manifest" href="./manifest.webmanifest" />
     <link rel="icon" href="./icon-192.png" />
     <link rel="apple-touch-icon" href="./icon-192.png" />
-    <link rel="stylesheet" href="./styles.css?v=30" />
+    <link rel="stylesheet" href="./styles.css?v=31" />
     <title>Invoice Studio</title>
   </head>
   <body>
@@ -178,9 +178,15 @@
               </div>
             </div>
             <div class="field-stack">
-              <label for="pdfFileName">PDF file name <span class="optional-label">(optional)</span></label>
-              <input id="pdfFileName" name="pdfFileName" data-field="pdfFileName" type="text" autocomplete="off" maxlength="120" aria-describedby="pdfFileNameHelp" />
-              <p id="pdfFileNameHelp" class="field-help">File name used when you choose Save as PDF. The .pdf extension is added automatically.</p>
+              <div class="field-label-row">
+                <label for="pdfFileName">PDF file name</label>
+                <label class="checkbox-control" for="customizePdfFileName">
+                  <input id="customizePdfFileName" type="checkbox" aria-controls="pdfFileName" />
+                  <span>Use a custom file name</span>
+                </label>
+              </div>
+              <input id="pdfFileName" name="pdfFileName" data-field="pdfFileName" type="text" autocomplete="off" maxlength="120" aria-describedby="pdfFileNameHelp" readonly />
+              <p id="pdfFileNameHelp" class="field-help">Matches the invoice number. Tick the checkbox to enter a custom PDF file name.</p>
             </div>
           </fieldset>
 
@@ -383,11 +389,11 @@
 
     <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
     <noscript>This app needs JavaScript to create invoices.</noscript>
-    <script src="./vendor/supabase.js?v=30" defer></script>
-    <script src="./feature-flags.js?v=30" defer></script>
-    <script src="./supabase-config.js?v=30" defer></script>
-    <script src="./backend.js?v=30" defer></script>
-    <script src="./outbox.js?v=30" defer></script>
-    <script src="./app.js?v=30" defer></script>
+    <script src="./vendor/supabase.js?v=31" defer></script>
+    <script src="./feature-flags.js?v=31" defer></script>
+    <script src="./supabase-config.js?v=31" defer></script>
+    <script src="./backend.js?v=31" defer></script>
+    <script src="./outbox.js?v=31" defer></script>
+    <script src="./app.js?v=31" defer></script>
   </body>
 </html>
