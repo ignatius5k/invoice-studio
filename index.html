@@ -5,15 +5,16 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="theme-color" content="#f2f3f5" />
     <meta name="description" content="Create, save, edit, and duplicate print-ready Eng Hoon Residences invoices." />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self'; img-src 'self'; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'" />
     <link rel="manifest" href="./manifest.webmanifest" />
     <link rel="icon" href="./icon-192.png" />
     <link rel="apple-touch-icon" href="./icon-192.png" />
-    <link rel="stylesheet" href="./styles.css?v=34" />
-    <link rel="stylesheet" href="./redesign.css?v=33" />
+    <link rel="stylesheet" href="./styles.css?v=36" />
+    <link rel="stylesheet" href="./redesign.css?v=36" />
     <title>Invoice Studio</title>
   </head>
   <body>
+    <a class="skip-link" href="#appMain">Skip to main content</a>
     <div id="appLoadingScreen" class="app-loading-screen" role="status" aria-live="polite">
       <div class="app-loading-mark">
         <img src="./eng-hoon-residences-logo.png" alt="" width="64" height="64" />
@@ -37,6 +38,7 @@
         </div>
       </div>
       <div class="header-actions">
+        <button id="updateButton" class="button button-secondary" type="button" hidden>Update ready</button>
         <button id="installButton" class="button button-secondary" type="button" hidden>Install app</button>
         <button id="invoiceListButton" class="button button-secondary" type="button" hidden>Invoices</button>
         <button id="newInvoiceButton" class="button button-secondary" type="button" hidden>New invoice</button>
@@ -51,6 +53,7 @@
       </div>
     </header>
 
+    <div id="appMain" tabindex="-1">
     <main id="authPage" class="auth-page" aria-labelledby="authTitle" hidden>
       <section class="auth-card">
         <div id="authConfigurationState" hidden>
@@ -100,13 +103,33 @@
       </section>
     </main>
 
+    <main id="storageRecoveryPage" class="auth-page" aria-labelledby="storageRecoveryTitle" hidden>
+      <section class="auth-card storage-recovery-card">
+        <p class="auth-label">Local data needs attention</p>
+        <h1 id="storageRecoveryTitle" tabindex="-1">Your invoices have not been changed</h1>
+        <p id="storageRecoveryMessage" class="auth-intro">Invoice Studio could not read or write this browser's storage.</p>
+        <p id="storageRecoveryDetail" class="auth-help"></p>
+        <div class="storage-recovery-actions">
+          <button id="recoveryExportButton" class="button button-primary" type="button">Download recovery backup</button>
+          <button id="recoveryImportButton" class="button button-secondary" type="button">Restore a backup</button>
+          <button id="recoveryRetryButton" class="button button-secondary" type="button">Try again</button>
+          <button id="recoveryClearButton" class="button button-danger" type="button">Clear unreadable local data</button>
+        </div>
+        <p class="auth-help">Clearing browser data is permanent. Download a recovery backup first whenever possible.</p>
+      </section>
+    </main>
+
     <main id="invoiceListPage" class="history-page" aria-labelledby="invoiceListTitle" hidden>
       <section class="history-hero">
-        <div>
-          <h1 id="invoiceListTitle" tabindex="-1">Invoices</h1>
-          <p class="history-intro">Create, edit, and duplicate invoices saved on this device.</p>
-        </div>
-        <button id="historyNewInvoiceButton" class="button button-primary" type="button">Create invoice</button>
+          <div>
+            <h1 id="invoiceListTitle" tabindex="-1">Invoices</h1>
+            <p class="history-intro">Create, edit, and duplicate invoices saved on this device.</p>
+          </div>
+          <div class="history-hero-actions">
+            <button id="exportDataButton" class="button button-secondary" type="button">Download backup</button>
+            <button id="importDataButton" class="button button-secondary" type="button">Restore backup</button>
+            <button id="historyNewInvoiceButton" class="button button-primary" type="button">Create invoice</button>
+          </div>
       </section>
 
       <aside id="draftNotice" class="draft-notice" aria-labelledby="draftNoticeTitle" hidden>
@@ -147,7 +170,7 @@
         <p id="historyLoadingState" class="history-feedback" role="status" aria-live="polite" hidden>Loading invoices...</p>
 
         <div id="historyErrorState" class="history-feedback history-error" role="alert" hidden>
-          <p>Invoices could not be loaded. Check your connection and try again.</p>
+          <p>Invoices could not be loaded from this browser. Download a backup, then check browser storage and try again.</p>
           <button id="retryHistoryButton" class="button button-secondary" type="button">Try again</button>
         </div>
 
@@ -166,7 +189,8 @@
           <button id="loadMoreInvoicesButton" class="button button-secondary" type="button" hidden>Load more</button>
         </div>
       </section>
-      <p class="history-storage-note">Invoices and drafts are stored in this browser on this device.</p>
+      <p class="history-storage-note">Invoices and drafts exist only in this browser profile. Clearing site data, using private browsing, or changing devices can remove access. Download a backup regularly.</p>
+      <input id="importDataFile" class="visually-hidden" type="file" accept="application/json,.json" tabindex="-1" aria-label="Choose an Invoice Studio backup file" />
     </main>
 
     <main id="editorPage" class="workspace" hidden>
@@ -343,6 +367,7 @@
         </div>
       </section>
     </main>
+    </div>
 
     <dialog id="legacyMigrationDialog" class="output-dialog legacy-migration-dialog" aria-labelledby="legacyMigrationTitle" aria-describedby="legacyMigrationDescription">
       <div class="output-dialog-card">
@@ -395,11 +420,11 @@
         <div class="output-option-list">
           <button id="savePdfButton" class="output-option output-option-primary" type="button">
             <span id="savePdfButtonLabel" class="output-option-title">Save as PDF</span>
-            <span class="output-option-description">Downloads the invoice as the PDF file shown above.</span>
+            <span class="output-option-description">Downloads an exact one-page visual copy.</span>
           </button>
           <button id="printNowButton" class="output-option" type="button">
             <span class="output-option-title">Print</span>
-            <span class="output-option-description">Opens the print window for a printer or other destination.</span>
+            <span class="output-option-description">Use your browser's Save as PDF option when you need selectable text.</span>
           </button>
         </div>
         <button id="cancelOutputDialogButton" class="button button-secondary output-cancel-button" type="button">Done</button>
@@ -408,8 +433,8 @@
 
     <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
     <noscript>This app needs JavaScript to create invoices.</noscript>
-    <script src="./backend.js?v=32" defer></script>
-    <script src="./outbox.js?v=32" defer></script>
-    <script src="./app.js?v=32" defer></script>
+    <script src="./backend.js?v=36" defer></script>
+    <script src="./outbox.js?v=36" defer></script>
+    <script src="./app.js?v=36" defer></script>
   </body>
 </html>

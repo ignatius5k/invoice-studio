@@ -154,6 +154,14 @@
     margin-top: 8px;
   }
 
+  #updateButton {
+    order: 0;
+    margin-bottom: 8px;
+    color: #fff;
+    border-color: var(--accent-dark);
+    background: var(--accent);
+  }
+
   #invoiceListButton::before,
   #newInvoiceButton::before,
   #installButton::before {
@@ -284,9 +292,10 @@
     letter-spacing: -0.045em;
   }
 
-  .history-hero h1:focus,
-  .panel-heading h1:focus {
-    outline: none;
+  .history-hero h1:focus-visible,
+  .panel-heading h1:focus-visible {
+    outline: 3px solid var(--accent);
+    outline-offset: 5px;
   }
 
   .history-intro {
@@ -294,7 +303,14 @@
     font-size: 14px;
   }
 
-  .history-hero > .button {
+  .history-hero-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    justify-content: flex-end;
+  }
+
+  .history-hero-actions > .button {
     min-height: 42px;
     padding-inline: 17px;
   }
@@ -354,7 +370,7 @@
   .invoice-table-head,
   .invoice-record {
     display: grid;
-    grid-template-columns: minmax(150px, 1.05fr) minmax(170px, 1.25fr) minmax(105px, 0.78fr) minmax(50px, 0.42fr) minmax(90px, 0.66fr) minmax(164px, auto);
+    grid-template-columns: minmax(150px, 1.05fr) minmax(170px, 1.25fr) minmax(105px, 0.78fr) minmax(50px, 0.42fr) minmax(90px, 0.66fr) minmax(220px, auto);
     gap: 18px;
     align-items: center;
   }
@@ -362,7 +378,7 @@
   .invoice-table-head {
     min-height: 40px;
     padding: 9px 20px;
-    color: #748094;
+    color: #536174;
     border-bottom: 1px solid var(--line);
     background: #f8f9fb;
     font-size: 10px;
@@ -435,8 +451,10 @@
   }
 
   .history-storage-note {
-    color: #7b8492;
+    max-width: 78ch;
+    color: #566274;
     font-size: 11px;
+    line-height: 1.5;
   }
 
   .workspace {
@@ -567,7 +585,7 @@
 @media screen and (max-width: 960px) {
   body {
     padding-left: 0;
-    padding-top: 66px;
+    padding-top: calc(66px + env(safe-area-inset-top));
   }
 
   .app-header {
@@ -607,7 +625,7 @@
 
   .header-actions > .button {
     width: auto;
-    min-height: 40px;
+    min-height: 44px;
     padding: 8px 11px;
     justify-content: center;
   }
@@ -619,7 +637,8 @@
 
   #invoiceListButton::before,
   #newInvoiceButton::before,
-  #installButton::before {
+  #installButton::before,
+  #updateButton::before {
     display: none;
   }
 
@@ -646,7 +665,7 @@
 
   .invoice-table-head,
   .invoice-record {
-    grid-template-columns: minmax(145px, 0.9fr) minmax(180px, 1.15fr) minmax(105px, 0.7fr) minmax(48px, 0.35fr) minmax(84px, 0.55fr) minmax(84px, auto);
+    grid-template-columns: minmax(145px, 0.9fr) minmax(180px, 1.15fr) minmax(105px, 0.7fr) minmax(48px, 0.35fr) minmax(84px, 0.55fr) minmax(108px, auto);
     gap: 12px;
   }
 
@@ -660,7 +679,7 @@
   }
 
   .header-actions > #printButton {
-    display: none;
+    display: inline-flex;
   }
 
   .preview-toolbar {
@@ -668,9 +687,15 @@
   }
 }
 
+@media screen and (max-width: 767px) {
+  .header-actions > #printButton {
+    display: none;
+  }
+}
+
 @media screen and (max-width: 700px) {
   body {
-    padding-top: 62px;
+    padding-top: calc(62px + env(safe-area-inset-top));
   }
 
   .app-header {
@@ -686,7 +711,7 @@
   }
 
   .header-actions > .button {
-    min-height: 40px;
+    min-height: 44px;
     padding-inline: 10px;
     font-size: 12px;
   }
@@ -704,6 +729,16 @@
     min-height: 0;
     gap: 14px;
     padding-bottom: 20px;
+  }
+
+  .history-hero-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    width: 100%;
+  }
+
+  .history-hero-actions #historyNewInvoiceButton {
+    grid-column: 1 / -1;
   }
 
   .history-hero h1 {
@@ -770,8 +805,8 @@
   .invoice-record-meta dt {
     display: block;
     margin: 0;
-    color: #7b8492;
-    font-size: 9px;
+    color: #596678;
+    font-size: 10px;
   }
 
   .invoice-record-meta dd {
@@ -786,11 +821,11 @@
 
   .invoice-record-actions .button {
     min-width: 74px;
-    min-height: 38px;
+    min-height: 44px;
   }
 
   .editor-panel {
-    padding: 22px 14px calc(28px + env(safe-area-inset-bottom));
+    padding: 22px 14px calc(104px + env(safe-area-inset-bottom));
   }
 
   .form-section {
@@ -798,10 +833,12 @@
   }
 
   .mobile-output-action {
-    position: sticky;
+    position: fixed;
+    right: 0;
     bottom: 0;
-    z-index: 5;
-    margin: 18px -14px -4px;
+    left: 0;
+    z-index: 19;
+    margin: 0;
     padding: 10px 14px calc(10px + env(safe-area-inset-bottom));
     border-top: 1px solid var(--line);
     background: rgb(248 249 250 / 0.96);
@@ -815,7 +852,7 @@
 
   .toast {
     right: 14px;
-    bottom: calc(14px + env(safe-area-inset-bottom));
+    bottom: calc(82px + env(safe-area-inset-bottom));
   }
 }
 

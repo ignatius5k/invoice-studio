@@ -129,6 +129,18 @@
       syncCounter(saved);
       return copy(saved);
     },
+    async deleteInvoice(_userId, id, expectedRevision) {
+      const records = read(REMOTE_HISTORY_KEY, []);
+      const existing = records.find((candidate) => candidate.id === id);
+      if (!existing) return false;
+      if (Number.isInteger(Number(expectedRevision)) && Number(expectedRevision) !== existing.revision) {
+        const error = new Error("This invoice changed in another session.");
+        error.code = "INVOICE_REVISION_CONFLICT";
+        throw error;
+      }
+      write(REMOTE_HISTORY_KEY, records.filter((candidate) => candidate.id !== id));
+      return true;
+    },
     async loadDraft() {
       const stored = read(REMOTE_DRAFT_KEY, null);
       if (!stored) return null;
@@ -183,7 +195,13 @@
       }
     },
     async nextInvoiceNumber(invoiceDate) {
-      const compactDate = invoiceDate.replaceAll("-", "");
+      const compactDate = invoiceDate.replace(/-/g, "");
+      const counters = read(REMOTE_COUNTER_KEY, {});
+      const sequence = (counters[compactDate] || 0) + 1;
+      return `EHR-${compactDate}-${String(sequence).padStart(3, "0")}`;
+    },
+    async reserveInvoiceNumber(invoiceDate) {
+      const compactDate = invoiceDate.replace(/-/g, "");
       const counters = read(REMOTE_COUNTER_KEY, {});
       counters[compactDate] = (counters[compactDate] || 0) + 1;
       write(REMOTE_COUNTER_KEY, counters);

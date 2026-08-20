@@ -1,19 +1,19 @@
 const CACHE_PREFIX = "invoice-studio-";
-const CACHE_NAME = `${CACHE_PREFIX}v34`;
+const CACHE_NAME = `${CACHE_PREFIX}v36`;
 const APP_SHELL = [
   "./",
   "./index.html",
-  "./styles.css?v=34",
-  "./redesign.css?v=33",
-  "./vendor/html2pdf.bundle.min.js?v=32",
-  "./backend.js?v=32",
-  "./outbox.js?v=32",
-  "./app.js?v=32",
+  "./styles.css?v=36",
+  "./redesign.css?v=36",
+  "./backend.js?v=36",
+  "./outbox.js?v=36",
+  "./app.js?v=36",
   "./manifest.webmanifest",
   "./eng-hoon-residences-logo.png",
   "./icon-192.png",
   "./icon-512.png"
 ];
+const RUNTIME_ASSETS = ["./vendor/html2pdf.bundle.min.js?v=32"];
 
 function appUrl(relativePath) {
   return new URL(relativePath, self.registration.scope).href;
@@ -21,6 +21,11 @@ function appUrl(relativePath) {
 
 function isAppShellRequest(requestUrl) {
   return APP_SHELL.some((relativePath) => appUrl(relativePath) === requestUrl.href);
+}
+
+function isManagedAssetRequest(requestUrl) {
+  return isAppShellRequest(requestUrl)
+    || RUNTIME_ASSETS.some((relativePath) => appUrl(relativePath) === requestUrl.href);
 }
 
 function isCacheableResponse(response) {
@@ -37,8 +42,9 @@ async function fetchShellRequest(event) {
   const cacheWrite = networkRequest
     .then(async (response) => {
       if (!isCacheableResponse(response)) return;
+      const responseForCache = response.clone();
       const cache = await caches.open(CACHE_NAME);
-      await cache.put(event.request, response.clone());
+      await cache.put(event.request, responseForCache);
     })
     .catch(() => {});
   event.waitUntil(cacheWrite);
@@ -58,8 +64,9 @@ async function fetchNavigation(event) {
     const cacheWrite = networkRequest
       .then(async (response) => {
         if (!isCacheableResponse(response)) return;
+        const responseForCache = response.clone();
         const cache = await caches.open(CACHE_NAME);
-        await cache.put(event.request, response.clone());
+        await cache.put(event.request, responseForCache);
       })
       .catch(() => {});
     event.waitUntil(cacheWrite);
@@ -79,11 +86,29 @@ self.addEventListener("install", (event) => {
   if (!self.registration.active) self.skipWaiting();
 });
 
+async function migrateRuntimeAssets(cacheKeys) {
+  const targetCache = await caches.open(CACHE_NAME);
+  const previousCaches = cacheKeys.filter((key) => key.startsWith(CACHE_PREFIX) && key !== CACHE_NAME);
+  for (const relativePath of RUNTIME_ASSETS) {
+    const requestUrl = appUrl(relativePath);
+    if (await targetCache.match(requestUrl)) continue;
+    for (const cacheName of previousCaches) {
+      const cached = await (await caches.open(cacheName)).match(requestUrl);
+      if (!cached) continue;
+      await targetCache.put(requestUrl, cached);
+      break;
+    }
+  }
+}
+
 self.addEventListener("activate", (event) => {
   event.waitUntil(
     caches
       .keys()
-      .then((keys) => Promise.all(keys.filter((key) => key.startsWith(CACHE_PREFIX) && key !== CACHE_NAME).map((key) => caches.delete(key))))
+      .then(async (keys) => {
+        await migrateRuntimeAssets(keys);
+        await Promise.all(keys.filter((key) => key.startsWith(CACHE_PREFIX) && key !== CACHE_NAME).map((key) => caches.delete(key)));
+      })
       .then(() => self.clients.claim()),
   );
 });
@@ -103,6 +128,6 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  if (!isAppShellRequest(requestUrl)) return;
+  if (!isManagedAssetRequest(requestUrl)) return;
   event.respondWith(fetchShellRequest(event));
 });

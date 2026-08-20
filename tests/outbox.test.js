@@ -137,3 +137,18 @@ test("draft outbox persists retry metadata and can rebase after an explicit conf
     { expectedRevision: 9, attempts: 0, nextAttemptAt: 0 },
   );
 });
+
+test("draft outbox keeps a session fallback when IndexedDB is unavailable", async () => {
+  const outbox = await loadOutbox({
+    open() {
+      throw new Error("IndexedDB denied");
+    },
+  });
+  const operation = await outbox.putSave("user-1", { invoiceNumber: "INV-FALLBACK" });
+  assert.equal(operation.storage, "memory");
+  assert.equal((await outbox.get("user-1")).storage, "memory");
+  assert.equal((await outbox.get("user-1")).operationId, operation.operationId);
+  assert.equal(await outbox.has("user-1"), true);
+  assert.equal(await outbox.remove("user-1", operation.operationId), true);
+  assert.equal(await outbox.has("user-1"), false);
+});

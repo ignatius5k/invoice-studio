@@ -10,6 +10,8 @@
   const DRAFT_KEY = "invoice-studio-draft-v1";
   const DRAFT_REVISION_KEY = "invoice-studio-guest-draft-revision-v1";
   const SEQUENCE_KEY = "invoice-studio-sequence-v1";
+  const RESTORE_JOURNAL_KEY = "invoice-studio-restore-journal-v1";
+  const MANAGED_KEYS = [HISTORY_KEY, DRAFT_KEY, DRAFT_REVISION_KEY, SEQUENCE_KEY];
   const localSession = Object.freeze({
     user: Object.freeze({ id: "local-guest", email: "This device" }),
   });
@@ -18,12 +20,71 @@
     return JSON.parse(JSON.stringify(value));
   }
 
-  function readJson(key, fallback) {
+  function storageError(message, code, key) {
+    const error = new Error(message);
+    error.code = code;
+    if (key) error.storageKey = key;
+    return error;
+  }
+
+  function readStoredRaw(key) {
     try {
-      const raw = window.localStorage.getItem(key);
-      return raw === null ? fallback : JSON.parse(raw);
+      return window.localStorage.getItem(key);
     } catch {
-      return fallback;
+      throw storageError("Browser storage is unavailable. Check this browser's site-storage settings and try again.", "LOCAL_STORAGE_UNAVAILABLE", key);
+    }
+  }
+
+  function readRestoreJournal() {
+    const raw = readStoredRaw(RESTORE_JOURNAL_KEY);
+    if (raw === null) return null;
+    try {
+      const journal = JSON.parse(raw);
+      return journal && typeof journal === "object" ? journal : null;
+    } catch {
+      throw storageError("Backup recovery data cannot be read. Download a recovery backup before clearing it.", "LOCAL_DATA_CORRUPT", RESTORE_JOURNAL_KEY);
+    }
+  }
+
+  function readRaw(key) {
+    if (MANAGED_KEYS.includes(key)) {
+      const journal = readRestoreJournal();
+      if (journal?.status === "pending" && journal.previous && Object.hasOwn(journal.previous, key)) {
+        return journal.previous[key];
+      }
+    }
+    return readStoredRaw(key);
+  }
+
+  function recoverInterruptedRestore() {
+    const journal = readRestoreJournal();
+    if (!journal) return;
+    if (journal.status === "committed") {
+      try {
+        window.localStorage.removeItem(RESTORE_JOURNAL_KEY);
+      } catch {}
+      return;
+    }
+    if (journal.status !== "pending" || !journal.previous) return;
+    try {
+      for (const key of MANAGED_KEYS) {
+        const raw = Object.hasOwn(journal.previous, key) ? journal.previous[key] : null;
+        if (raw === null) window.localStorage.removeItem(key);
+        else window.localStorage.setItem(key, raw);
+      }
+      window.localStorage.removeItem(RESTORE_JOURNAL_KEY);
+    } catch {
+      throw storageError("A backup restore was interrupted. Your earlier data is protected; free browser storage and try again.", "LOCAL_STORAGE_UNAVAILABLE", RESTORE_JOURNAL_KEY);
+    }
+  }
+
+  function readJson(key, fallback) {
+    const raw = readRaw(key);
+    if (raw === null) return fallback;
+    try {
+      return JSON.parse(raw);
+    } catch {
+      throw storageError("Some saved Invoice Studio data cannot be read. Download a recovery backup before clearing it.", "LOCAL_DATA_CORRUPT", key);
     }
   }
 
@@ -31,19 +92,57 @@
     try {
       window.localStorage.setItem(key, JSON.stringify(value));
     } catch {
-      throw new Error("Browser storage is unavailable or full. Export any important invoices before continuing.");
+      throw storageError("Browser storage is unavailable or full. Download a backup and free browser storage before continuing.", "LOCAL_STORAGE_UNAVAILABLE", key);
     }
+  }
+
+  function removeStoredValue(key) {
+    try {
+      window.localStorage.removeItem(key);
+    } catch {
+      throw storageError("Browser storage is unavailable. Check this browser's site-storage settings and try again.", "LOCAL_STORAGE_UNAVAILABLE", key);
+    }
+  }
+
+  function validHistoryRecord(record) {
+    return Boolean(record && typeof record.id === "string" && record.id && record.invoice && Array.isArray(record.invoice.items));
   }
 
   function storedHistory() {
     const value = readJson(HISTORY_KEY, []);
-    return Array.isArray(value) ? value.filter((record) => record?.id && record?.invoice) : [];
+    if (!Array.isArray(value) || value.some((record) => !validHistoryRecord(record))) {
+      throw storageError("Some saved invoices cannot be read. Download a recovery backup before clearing them.", "LOCAL_DATA_CORRUPT", HISTORY_KEY);
+    }
+    const seen = new Set();
+    return value.map((record, index) => {
+      let id = String(record.id);
+      if (seen.has(id)) {
+        const base = `${id}-recovered-${index + 1}`;
+        id = base;
+        let suffix = 2;
+        while (seen.has(id)) id = `${base}-${suffix++}`;
+      }
+      seen.add(id);
+      if (id === record.id) return record;
+      return { ...record, id, invoice: { ...record.invoice, historyId: id } };
+    });
   }
 
   function invoiceConflictError() {
     const error = new Error("This invoice changed in another tab. Reload it before saving again.");
     error.code = "INVOICE_REVISION_CONFLICT";
     return error;
+  }
+
+  function preserveInvoiceSequence(invoiceNumber) {
+    const match = String(invoiceNumber || "").match(/^EHR-(\d{8})-(\d+)$/);
+    if (!match) return;
+    const [, date, rawSequence] = match;
+    const sequence = Number(rawSequence);
+    if (!Number.isInteger(sequence) || sequence < 1) return;
+    const saved = readJson(SEQUENCE_KEY, null);
+    const savedSequence = saved?.date === date && Number.isInteger(saved.sequence) ? saved.sequence : 0;
+    if (sequence > savedSequence) writeJson(SEQUENCE_KEY, { date, sequence });
   }
 
   function draftConflictError() {
@@ -95,16 +194,6 @@
     if (!userId) throw new Error("Open the local workspace before saving invoices.");
     const records = storedHistory();
     const existingIndex = records.findIndex((candidate) => candidate.id === record.id);
-    const duplicateNumber = records.some((candidate) => (
-      candidate.id !== record.id
-      && String(candidate.invoice?.invoiceNumber || "") === String(record.invoice?.invoiceNumber || "")
-    ));
-    if (duplicateNumber) {
-      const error = new Error("That invoice number is already in use.");
-      error.code = "INVOICE_NUMBER_CONFLICT";
-      throw error;
-    }
-
     const existing = existingIndex >= 0 ? records[existingIndex] : null;
     const expectedRevision = Number(record.revision);
     const currentRevision = Number(existing?.revision) || (existing ? 1 : 0);
@@ -124,6 +213,21 @@
     else records.push(savedRecord);
     writeJson(HISTORY_KEY, records);
     return clone(savedRecord);
+  }
+
+  async function deleteInvoice(userId, id, expectedRevision) {
+    if (!userId) throw new Error("Open the local workspace before deleting invoices.");
+    const records = storedHistory();
+    const existingIndex = records.findIndex((candidate) => candidate.id === id);
+    if (existingIndex < 0) return false;
+    const existing = records[existingIndex];
+    const expected = Number(expectedRevision);
+    const currentRevision = Number(existing.revision) || 1;
+    if (Number.isInteger(expected) && expected > 0 && expected !== currentRevision) throw invoiceConflictError();
+    preserveInvoiceSequence(existing.invoice?.invoiceNumber);
+    records.splice(existingIndex, 1);
+    writeJson(HISTORY_KEY, records);
+    return true;
   }
 
   async function loadDraft(userId) {
@@ -158,8 +262,8 @@
     if (existingInvoice && Number.isInteger(expected) && expected > 0 && expected !== currentRevision) {
       throw draftConflictError();
     }
-    window.localStorage.removeItem(DRAFT_KEY);
-    window.localStorage.removeItem(DRAFT_REVISION_KEY);
+    removeStoredValue(DRAFT_REVISION_KEY);
+    removeStoredValue(DRAFT_KEY);
     throwIfAborted(signal);
   }
 
@@ -177,8 +281,8 @@
     }
   }
 
-  async function nextInvoiceNumber(invoiceDate) {
-    const compactDate = String(invoiceDate || "").replaceAll("-", "");
+  function calculateNextInvoiceNumber(invoiceDate) {
+    const compactDate = String(invoiceDate || "").replace(/-/g, "");
     if (!/^\d{8}$/.test(compactDate)) throw new Error("Choose a valid invoice date.");
     const savedSequence = readJson(SEQUENCE_KEY, null);
     const savedValue = savedSequence?.date === compactDate && Number.isInteger(savedSequence.sequence)
@@ -193,8 +297,91 @@
     }, 0);
     const sequence = Math.max(savedValue, historyValue) + 1;
     if (sequence > 999999) throw new Error("The invoice sequence for this date is full.");
-    writeJson(SEQUENCE_KEY, { date: compactDate, sequence });
     return `${prefix}${String(sequence).padStart(3, "0")}`;
+  }
+
+  async function nextInvoiceNumber(invoiceDate) {
+    return calculateNextInvoiceNumber(invoiceDate);
+  }
+
+  async function reserveInvoiceNumber(invoiceDate) {
+    const invoiceNumber = calculateNextInvoiceNumber(invoiceDate);
+    preserveInvoiceSequence(invoiceNumber);
+    return invoiceNumber;
+  }
+
+  function exportValue(key) {
+    const raw = readRaw(key);
+    if (raw === null) return null;
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return { unreadableRawValue: raw };
+    }
+  }
+
+  function exportLocalData() {
+    return {
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      source: "Eng Hoon Residences Invoice Studio browser storage",
+      history: exportValue(HISTORY_KEY),
+      draft: exportValue(DRAFT_KEY),
+      draftRevision: exportValue(DRAFT_REVISION_KEY),
+      sequence: exportValue(SEQUENCE_KEY),
+    };
+  }
+
+  function validateBackup(backup) {
+    if (!backup || typeof backup !== "object") throw new Error("Choose an Invoice Studio backup file.");
+    const history = backup.history ?? [];
+    const draft = backup.draft ?? null;
+    if (!Array.isArray(history) || history.some((record) => !validHistoryRecord(record))) {
+      throw new Error("This backup contains unreadable invoice history.");
+    }
+    if (draft !== null && (!draft || typeof draft !== "object" || !Array.isArray(draft.items))) {
+      throw new Error("This backup contains an unreadable draft.");
+    }
+    for (const value of [history, draft, backup.draftRevision, backup.sequence]) {
+      if (value && typeof value === "object" && Object.hasOwn(value, "unreadableRawValue")) {
+        throw new Error("This recovery backup contains unreadable raw data and cannot be restored automatically.");
+      }
+    }
+    return {
+      history,
+      draft,
+      draftRevision: backup.draftRevision ?? (draft ? 1 : null),
+      sequence: backup.sequence ?? null,
+    };
+  }
+
+  function restoreLocalData(backup) {
+    const values = validateBackup(backup);
+    const previous = Object.fromEntries(MANAGED_KEYS.map((key) => [key, readRaw(key)]));
+    const journal = { version: 1, status: "pending", previous };
+    try {
+      window.localStorage.setItem(RESTORE_JOURNAL_KEY, JSON.stringify(journal));
+      writeJson(HISTORY_KEY, values.history);
+      if (values.draft === null) removeStoredValue(DRAFT_KEY);
+      else writeJson(DRAFT_KEY, values.draft);
+      if (values.draftRevision === null) removeStoredValue(DRAFT_REVISION_KEY);
+      else writeJson(DRAFT_REVISION_KEY, values.draftRevision);
+      if (values.sequence === null) removeStoredValue(SEQUENCE_KEY);
+      else writeJson(SEQUENCE_KEY, values.sequence);
+      window.localStorage.setItem(RESTORE_JOURNAL_KEY, JSON.stringify({ ...journal, status: "committed" }));
+      window.localStorage.removeItem(RESTORE_JOURNAL_KEY);
+    } catch (error) {
+      if (error?.code) throw error;
+      throw storageError("The backup could not be restored. Your earlier data is protected.", "LOCAL_STORAGE_UNAVAILABLE", RESTORE_JOURNAL_KEY);
+    }
+  }
+
+  function clearLocalData() {
+    removeStoredValue(HISTORY_KEY);
+    removeStoredValue(DRAFT_KEY);
+    removeStoredValue(DRAFT_REVISION_KEY);
+    removeStoredValue(SEQUENCE_KEY);
+    removeStoredValue(RESTORE_JOURNAL_KEY);
   }
 
   const unavailableAccountAction = async () => {
@@ -205,7 +392,10 @@
     configured: true,
     guestMode: true,
     localMode: true,
-    getSession: async () => localSession,
+    getSession: async () => {
+      recoverInterruptedRestore();
+      return localSession;
+    },
     onAuthStateChange: () => ({ unsubscribe() {} }),
     signIn: unavailableAccountAction,
     signUp: unavailableAccountAction,
@@ -214,10 +404,15 @@
     signOut: async () => {},
     listInvoices,
     saveInvoice,
+    deleteInvoice,
     loadDraft,
     saveDraft,
     deleteDraft,
     migrateLocalData,
     nextInvoiceNumber,
+    reserveInvoiceNumber,
+    exportLocalData,
+    restoreLocalData,
+    clearLocalData,
   };
 }());

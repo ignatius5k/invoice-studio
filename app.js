@@ -1,6 +1,8 @@
 const STORAGE_KEY = "invoice-studio-draft-v1";
+const DRAFT_REVISION_KEY = "invoice-studio-guest-draft-revision-v1";
 const SEQUENCE_KEY = "invoice-studio-sequence-v1";
 const HISTORY_KEY = "invoice-studio-history-v1";
+const RESTORE_JOURNAL_KEY = "invoice-studio-restore-journal-v1";
 const PAPER_WIDTH = 793.7;
 const PAPER_HEIGHT = 1122.52;
 const MAX_QUANTITY = 9999;
@@ -23,6 +25,7 @@ const saveStatus = document.querySelector("#saveStatus");
 const toast = document.querySelector("#toast");
 const appLoadingScreen = document.querySelector("#appLoadingScreen");
 const installButton = document.querySelector("#installButton");
+const updateButton = document.querySelector("#updateButton");
 const offlineBanner = document.querySelector("#offlineBanner");
 const outputDialog = document.querySelector("#outputDialog");
 const outputFileName = document.querySelector("#outputFileName");
@@ -88,6 +91,16 @@ const localDraftConflictSummary = document.querySelector("#localDraftConflictSum
 const cloudDraftConflictSummary = document.querySelector("#cloudDraftConflictSummary");
 const keepLocalDraftButton = document.querySelector("#keepLocalDraftButton");
 const keepCloudDraftButton = document.querySelector("#keepCloudDraftButton");
+const storageRecoveryPage = document.querySelector("#storageRecoveryPage");
+const storageRecoveryMessage = document.querySelector("#storageRecoveryMessage");
+const storageRecoveryDetail = document.querySelector("#storageRecoveryDetail");
+const recoveryExportButton = document.querySelector("#recoveryExportButton");
+const recoveryImportButton = document.querySelector("#recoveryImportButton");
+const recoveryRetryButton = document.querySelector("#recoveryRetryButton");
+const recoveryClearButton = document.querySelector("#recoveryClearButton");
+const exportDataButton = document.querySelector("#exportDataButton");
+const importDataButton = document.querySelector("#importDataButton");
+const importDataFile = document.querySelector("#importDataFile");
 
 let state = createInvoiceDraft();
 let invoiceHistory = [];
@@ -128,6 +141,10 @@ let pendingAuthEmailRequest = "";
 let pendingAuthEmailRequestUntil = 0;
 let authEmailRequestsBlockedUntil = 0;
 let printPreviousTitle;
+let editorMode = "new";
+let waitingServiceWorker;
+let reloadingForServiceWorker = false;
+let draftStorageRefreshTimer;
 
 function normalizeInvoiceData(value) {
   if (!value || !Array.isArray(value.items) || value.items.length === 0) return null;
@@ -348,6 +365,7 @@ function showSignedOutPage() {
   clearSensitiveWorkspace();
   hideWorkspace();
   accountControls.hidden = true;
+  storageRecoveryPage.hidden = true;
   authPage.hidden = false;
   authConfigurationState.hidden = true;
   authSignInState.hidden = false;
@@ -364,6 +382,7 @@ function showConfigurationPage() {
   clearSensitiveWorkspace();
   hideWorkspace();
   accountControls.hidden = true;
+  storageRecoveryPage.hidden = true;
   authPage.hidden = false;
   authConfigurationState.hidden = false;
   authSignInState.hidden = true;
@@ -376,6 +395,7 @@ function showConfigurationPage() {
 
 function showPasswordRecoveryPage() {
   hideWorkspace();
+  storageRecoveryPage.hidden = true;
   authPage.hidden = false;
   authConfigurationState.hidden = true;
   authSignInState.hidden = true;
@@ -414,14 +434,41 @@ function legacyExportValue(key) {
   }
 }
 
-function exportLegacyBrowserData() {
-  const backup = {
-    exportedAt: new Date().toISOString(),
-    source: "Eng Hoon Residences Invoice Studio browser storage",
-    history: legacyExportValue(HISTORY_KEY),
-    draft: legacyExportValue(STORAGE_KEY),
-    sequence: legacyExportValue(SEQUENCE_KEY),
-  };
+function localBackupData() {
+  let backup;
+  try {
+    backup = typeof backend.exportLocalData === "function"
+      ? backend.exportLocalData()
+      : {
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        source: "Eng Hoon Residences Invoice Studio browser storage",
+        history: legacyExportValue(HISTORY_KEY),
+        draft: legacyExportValue(STORAGE_KEY),
+        sequence: legacyExportValue(SEQUENCE_KEY),
+      };
+  } catch (error) {
+    if (!['LOCAL_STORAGE_UNAVAILABLE', 'LOCAL_DATA_CORRUPT'].includes(error?.code)) throw error;
+    backup = {
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      source: "Eng Hoon Residences Invoice Studio open-tab recovery",
+      history: { unavailable: true, message: error.message },
+      draft: null,
+      draftRevision: null,
+      sequence: null,
+    };
+  }
+  if (currentUser && (hasUnsavedDraft() || hasEnteredContent())) {
+    backup.draft = cloneInvoice(state);
+    backup.draftRevision = draftRevision ?? null;
+    backup.openTabDraftIncluded = true;
+  }
+  return backup;
+}
+
+function downloadLocalBackup(options = {}) {
+  const backup = localBackupData();
   const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
@@ -431,7 +478,75 @@ function exportLegacyBrowserData() {
   link.click();
   link.remove();
   window.setTimeout(() => URL.revokeObjectURL(url), 0);
-  legacyMigrationMessage.textContent = "Backup downloaded. Choose whether to move, discard, or keep the local data.";
+  if (options.migration) {
+    legacyMigrationMessage.textContent = "Backup downloaded. Choose whether to move, discard, or keep the local data.";
+  } else if (options.recovery) {
+    storageRecoveryDetail.textContent = "Recovery backup downloaded. Keep it somewhere safe before clearing any data.";
+  } else {
+    showToast("Local backup downloaded.");
+  }
+}
+
+function exportLegacyBrowserData() {
+  try {
+    downloadLocalBackup({ migration: true });
+  } catch (error) {
+    legacyMigrationMessage.textContent = error?.message || "The backup could not be created.";
+    legacyMigrationMessage.dataset.state = "error";
+  }
+}
+
+function requestBackupRestore() {
+  importDataFile.value = "";
+  importDataFile.click();
+}
+
+async function restoreBackupFile(event) {
+  const [file] = event.target.files || [];
+  if (!file) return;
+  try {
+    const backup = JSON.parse(await file.text());
+    if (typeof backend.restoreLocalData !== "function") throw new Error("Backup restore is unavailable in this build.");
+    backend.restoreLocalData(backup);
+    if (currentUser) await draftOutbox.remove(currentUser.id);
+    showToast("Backup restored. Reloading your invoices...");
+    window.setTimeout(() => window.location.reload(), 250);
+  } catch (error) {
+    const message = error instanceof SyntaxError ? "That file is not valid JSON." : (error?.message || "The backup could not be restored.");
+    if (!storageRecoveryPage.hidden) storageRecoveryDetail.textContent = message;
+    showToast(message);
+  }
+}
+
+function showStorageRecovery(error) {
+  currentPage = "recovery";
+  document.body.dataset.page = "recovery";
+  authPage.hidden = true;
+  invoiceListPage.hidden = true;
+  editorPage.hidden = true;
+  storageRecoveryPage.hidden = false;
+  accountControls.hidden = true;
+  invoiceListButton.hidden = true;
+  newInvoiceButton.hidden = true;
+  printButton.hidden = true;
+  storageRecoveryMessage.textContent = error?.message || "Invoice Studio could not access this browser's local storage.";
+  storageRecoveryDetail.textContent = error?.storageKey
+    ? `Affected storage area: ${error.storageKey}`
+    : "Your existing local data has not been intentionally changed.";
+  document.title = "Local data recovery | Invoice Studio";
+  requestAnimationFrame(() => document.querySelector("#storageRecoveryTitle")?.focus({ preventScroll: true }));
+}
+
+async function clearRecoveryData() {
+  if (!window.confirm("Permanently clear Invoice Studio invoices and drafts from this browser? Download a recovery backup first.")) return;
+  try {
+    if (typeof backend.clearLocalData !== "function") throw new Error("Local data clearing is unavailable in this build.");
+    backend.clearLocalData();
+    if (currentUser) await draftOutbox.remove(currentUser.id);
+    window.location.reload();
+  } catch (error) {
+    storageRecoveryDetail.textContent = error?.message || "Local data could not be cleared.";
+  }
 }
 
 function setLegacyMigrationBusy(isBusy) {
@@ -545,7 +660,11 @@ function stageDraftSave() {
     .catch(() => {})
     .then(() => draftOutbox.putSave(userId, snapshot, expectedRevision))
     .then((operation) => {
-      if (currentUser?.id === userId) setDraftSyncStatus("waiting", "Saved on this device. Waiting to sync");
+      if (currentUser?.id === userId) {
+        setDraftSyncStatus("waiting", operation?.storage === "memory"
+          ? "Draft is only in this open tab"
+          : "Saved on this device. Waiting to sync");
+      }
       return operation;
     })
     .catch((error) => {
@@ -657,7 +776,13 @@ async function runDraftOutboxSync(force = false) {
       draftRevision = nextRevision;
       const time = new Intl.DateTimeFormat("en-SG", { hour: "numeric", minute: "2-digit" }).format(new Date());
       setDraftSyncStatus("synced", `Synced ${time}`);
-      saveStatus.textContent = `Saved ${time}`;
+      if (!state.historyId) {
+        saveStatus.textContent = editorMode === "duplicate"
+          ? "Duplicate draft saved locally. Not in history."
+          : `Draft saved ${time}`;
+      } else {
+        saveStatus.textContent = `Saved ${time}`;
+      }
     }
     return true;
   } catch (error) {
@@ -668,8 +793,10 @@ async function runDraftOutboxSync(force = false) {
     const attempts = Number(operation.attempts || 0) + 1;
     const delay = retryDelay(attempts);
     await draftOutbox.markRetry(userId, operation.operationId, attempts, Date.now() + delay, error?.message);
-    setDraftSyncStatus("error", "Draft safe on this device. Sync retrying");
-    saveStatus.textContent = "Saved on this device";
+    const memoryOnly = operation.storage === "memory";
+    setDraftSyncStatus("error", memoryOnly ? "Draft not saved. Keep this tab open" : "Draft safe on this device. Sync retrying");
+    saveStatus.textContent = memoryOnly ? "Draft not saved—keep this tab open" : "Saved on this device";
+    if (memoryOnly) showToast("Browser storage is unavailable. Keep this tab open and download a recovery backup.");
     scheduleDraftRetry(delay);
     return false;
   }
@@ -733,12 +860,18 @@ async function reconcileDraftOutbox(userId, remoteDraftRecord) {
 }
 
 function normalizeHistoryRecords(records) {
+  const seen = new Set();
   return records
-    .map((record) => {
+    .map((record, index) => {
       const invoice = normalizeInvoiceData(record.invoice);
       if (!invoice) return null;
-      invoice.historyId = record.id;
-      return { ...record, invoice };
+      let id = String(record.id || "");
+      if (!id) return null;
+      if (seen.has(id)) id = `${id}-recovered-${index + 1}`;
+      while (seen.has(id)) id = `${id}-copy`;
+      seen.add(id);
+      invoice.historyId = id;
+      return { ...record, id, invoice };
     })
     .filter(Boolean);
 }
@@ -781,8 +914,12 @@ async function loadInvoiceHistory(options = {}) {
     historyTotal = Number.isFinite(Number(page.total)) ? Number(page.total) : invoiceHistory.length;
     historyLoadError = false;
     return true;
-  } catch {
-    if (requestVersion === historyRequestVersion) historyLoadError = true;
+  } catch (error) {
+    if (backend.guestMode && ["LOCAL_DATA_CORRUPT", "LOCAL_STORAGE_UNAVAILABLE"].includes(error?.code)) {
+      showStorageRecovery(error);
+    } else if (requestVersion === historyRequestVersion) {
+      historyLoadError = true;
+    }
     return false;
   } finally {
     if (requestVersion === historyRequestVersion) {
@@ -804,10 +941,11 @@ async function loadAuthenticatedWorkspace(session) {
     ? "Create, edit, and duplicate invoices saved on this device."
     : "Create, edit, and duplicate invoices synced to your account.";
   historyStorageNote.textContent = backend.guestMode
-    ? "Invoices and drafts are stored in this browser on this device."
+    ? "Invoices and drafts exist only in this browser profile. Clearing site data, using private browsing, or changing devices can remove access. Download a backup regularly."
     : "Invoices and drafts are protected by your account.";
   if (backend.guestMode) setDraftSyncStatus("synced", "Saved locally");
   accountControls.hidden = false;
+  storageRecoveryPage.hidden = true;
   authPage.hidden = false;
   setAuthMessage("Loading your invoices...");
 
@@ -842,6 +980,10 @@ async function loadAuthenticatedWorkspace(session) {
       : "Existing browser invoices were moved to your account.");
     if (migrationAction === "discarded") showToast("Local browser data was discarded without moving it.");
   } catch (error) {
+    if (backend.guestMode && ["LOCAL_DATA_CORRUPT", "LOCAL_STORAGE_UNAVAILABLE"].includes(error?.code)) {
+      showStorageRecovery(error);
+      return;
+    }
     try {
       await backend.signOut();
     } catch {}
@@ -990,8 +1132,12 @@ async function initializeApplication() {
     if (session) await loadAuthenticatedWorkspace(session);
     else showSignedOutPage();
   } catch (error) {
-    showSignedOutPage();
-    setAuthMessage(error?.message || "Authentication is unavailable. Try again.", "error");
+    if (backend.guestMode && ["LOCAL_DATA_CORRUPT", "LOCAL_STORAGE_UNAVAILABLE"].includes(error?.code)) {
+      showStorageRecovery(error);
+    } else {
+      showSignedOutPage();
+      setAuthMessage(error?.message || "Authentication is unavailable. Try again.", "error");
+    }
   } finally {
     appLoadingScreen.classList.add("is-ready");
     window.setTimeout(() => { appLoadingScreen.hidden = true; }, 220);
@@ -1008,7 +1154,7 @@ function createInvoiceDraft(invoiceNumberOverride) {
   const today = new Date();
   const due = new Date(today);
   due.setDate(due.getDate() + 7);
-  const compactDate = isoDate(today).replaceAll("-", "");
+  const compactDate = isoDate(today).replace(/-/g, "");
   const invoiceNumber = invoiceNumberOverride || `EHR-${compactDate}-001`;
   return {
     draftDirty: false,
@@ -1022,10 +1168,13 @@ function createInvoiceDraft(invoiceNumberOverride) {
   };
 }
 
-async function createLocalInvoiceDraft() {
+async function createLocalInvoiceDraft(options = {}) {
   if (!currentUser) throw new Error("Open the local workspace before creating an invoice.");
   const today = isoDate(new Date());
-  const invoiceNumber = await backend.nextInvoiceNumber(today);
+  const allocator = options.reserve && typeof backend.reserveInvoiceNumber === "function"
+    ? backend.reserveInvoiceNumber
+    : backend.nextInvoiceNumber;
+  const invoiceNumber = await allocator(today);
   return createInvoiceDraft(invoiceNumber);
 }
 
@@ -1082,7 +1231,8 @@ function safePdfFileName(value, fallback) {
     .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "-")
     .replace(/[. ]+$/g, "")
     .slice(0, 120);
-  return cleaned || fallbackName || "invoice";
+  const fileName = cleaned || fallbackName || "invoice";
+  return /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(fileName) ? `${fileName}-invoice` : fileName;
 }
 
 function invoiceTotal() {
@@ -1090,10 +1240,23 @@ function invoiceTotal() {
 }
 
 function invoiceTotalFor(invoice) {
-  return invoice.items.reduce((total, item) => total + (Number(item.quantity) || 0) * (Number(item.price) || 0), 0);
+  return invoice.items.reduce((total, item) => {
+    const quantity = Number(item.quantity);
+    const price = Number(item.price);
+    const valid = item.quantity !== ""
+      && item.price !== ""
+      && Number.isInteger(quantity)
+      && quantity >= 1
+      && quantity <= MAX_QUANTITY
+      && Number.isFinite(price)
+      && price >= 0
+      && price <= MAX_PRICE;
+    return valid && Number.isFinite(total) ? total + quantity * price : Number.NaN;
+  }, 0);
 }
 
 function formatHistoryAmount(value) {
+  if (!Number.isFinite(Number(value))) return "Unavailable";
   return new Intl.NumberFormat("en-SG", { style: "currency", currency: "SGD" }).format(value);
 }
 
@@ -1171,9 +1334,9 @@ async function saveCurrentInvoiceToHistory() {
     if (error?.code === "INVOICE_REVISION_CONFLICT") {
       saveStatus.textContent = "Invoice changed elsewhere";
       showToast("This invoice changed in another session. Your edits were not overwritten; reload the invoice before saving again.");
-    } else if (error?.code === "INVOICE_NUMBER_CONFLICT") {
-      saveStatus.textContent = "Invoice number already used";
-      showToast("That invoice number is already in use. Choose a unique invoice number and save again.");
+    } else if (["LOCAL_DATA_CORRUPT", "LOCAL_STORAGE_UNAVAILABLE"].includes(error?.code)) {
+      saveStatus.textContent = "Browser storage needs attention";
+      showStorageRecovery(error);
     } else {
       saveStatus.textContent = "Could not save invoice";
       showToast("The invoice could not be saved. Check browser storage and try again.");
@@ -1195,6 +1358,7 @@ async function saveCurrentInvoiceToHistory() {
   state.historyId = id;
   state.draftDirty = false;
   draftChanged = false;
+  draftPersistenceEnabled = false;
   saveStatus.textContent = existingRecord ? "Invoice changes saved" : "Invoice saved to history";
   renderInvoiceHistory();
   return true;
@@ -1254,7 +1418,13 @@ function renderInvoiceHistory() {
     duplicate.dataset.duplicateInvoice = record.id;
     duplicate.textContent = "Duplicate";
     duplicate.setAttribute("aria-label", `Duplicate invoice ${invoice.invoiceNumber}`);
-    actions.append(edit, duplicate);
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "button button-danger";
+    remove.dataset.deleteInvoice = record.id;
+    remove.textContent = "Delete";
+    remove.setAttribute("aria-label", `Delete invoice ${invoice.invoiceNumber}`);
+    actions.append(edit, duplicate, remove);
 
     article.append(identity, meta, actions);
     invoiceHistoryList.append(article);
@@ -1287,8 +1457,10 @@ function clearValidationErrors() {
 }
 
 function showEditorPage(mode = "new", focusEditor = true) {
+  editorMode = mode;
   currentPage = "editor";
   document.body.dataset.page = "editor";
+  storageRecoveryPage.hidden = true;
   invoiceListPage.hidden = true;
   editorPage.hidden = false;
   invoiceListButton.hidden = false;
@@ -1310,6 +1482,7 @@ function showInvoiceList(focusHeading = true) {
   persistDraftImmediately();
   currentPage = "history";
   document.body.dataset.page = "history";
+  storageRecoveryPage.hidden = true;
   editorPage.hidden = true;
   invoiceListPage.hidden = false;
   invoiceListButton.hidden = false;
@@ -1347,22 +1520,10 @@ async function duplicateSavedInvoice(id) {
   if (!record || !canReplaceCurrentDraft("Duplicate this invoice and replace your unsaved draft?")) return;
   clearTimeout(saveTimer);
   clearValidationErrors();
-  let freshInvoice;
-  try {
-    freshInvoice = await createLocalInvoiceDraft();
-  } catch {
-    showToast("A new invoice number could not be created. Check browser storage and try again.");
-    return;
-  }
   state = {
     ...cloneInvoice(record.invoice),
     historyId: undefined,
     draftDirty: true,
-    invoiceNumber: freshInvoice.invoiceNumber,
-    pdfFileName: freshInvoice.invoiceNumber,
-    pdfFileNameCustomized: false,
-    invoiceDate: freshInvoice.invoiceDate,
-    dueDate: freshInvoice.dueDate,
     items: record.invoice.items.map((item, index) => ({
       ...item,
       id: `item-${Date.now()}-${index}-${Math.random().toString(16).slice(2)}`,
@@ -1370,10 +1531,49 @@ async function duplicateSavedInvoice(id) {
   };
   draftChanged = true;
   draftPersistenceEnabled = true;
+  editorMode = "duplicate";
   fillForm();
   persistDraftImmediately();
   saveStatus.textContent = "Duplicate ready. Not yet saved.";
   showEditorPage("duplicate");
+}
+
+async function deleteSavedInvoice(id) {
+  const record = invoiceHistory.find((candidate) => candidate.id === id);
+  if (!record || typeof backend.deleteInvoice !== "function") return;
+  const label = record.invoice.invoiceNumber || "this invoice";
+  const deletesCurrentInvoice = state.historyId === record.id;
+  const draftWarning = deletesCurrentInvoice ? " and any linked draft changes" : "";
+  if (!window.confirm(`Permanently delete invoice ${label}${draftWarning} from this browser?`)) return;
+  try {
+    if (deletesCurrentInvoice) await deleteStoredDraft();
+    const removed = await backend.deleteInvoice(currentUser.id, record.id, record.revision);
+    if (!removed) {
+      showToast("That invoice was already removed.");
+      await loadInvoiceHistory({ reset: true });
+      return;
+    }
+    invoiceHistory = invoiceHistory.filter((candidate) => candidate.id !== record.id);
+    historyTotal = Math.max(0, historyTotal - 1);
+    if (deletesCurrentInvoice) {
+      state = await createLocalInvoiceDraft();
+      draftRevision = undefined;
+      draftChanged = false;
+      draftPersistenceEnabled = false;
+      editorMode = "new";
+      fillForm();
+    }
+    renderInvoiceHistory();
+    showToast(`Invoice ${label} deleted.`);
+  } catch (error) {
+    if (error?.code === "INVOICE_REVISION_CONFLICT") {
+      showToast("This invoice changed in another tab. Reload the list before deleting it.");
+    } else if (["LOCAL_DATA_CORRUPT", "LOCAL_STORAGE_UNAVAILABLE"].includes(error?.code)) {
+      showStorageRecovery(error);
+    } else {
+      showToast(error?.message || "The invoice could not be deleted.");
+    }
+  }
 }
 
 function setText(selector, value) {
@@ -1412,11 +1612,15 @@ function createField(className, label, input, id) {
 }
 
 function stripBoldMarkers(value) {
-  return String(value || "").replaceAll("**", "");
+  return String(value || "").replace(/\*\*/g, "");
 }
 
 function updateDescriptionValidity(input) {
   input.setCustomValidity(stripBoldMarkers(input.value).trim() ? "" : "Enter an item description.");
+}
+
+function updateRequiredTextValidity(input) {
+  input.setCustomValidity(input.value.trim() ? "" : "Enter a value that is not only spaces.");
 }
 
 function toggleBoldFormatting(input) {
@@ -1445,6 +1649,11 @@ function toggleBoldFormatting(input) {
     nextValue = `${value.slice(0, start)}**${selected}**${value.slice(end)}`;
     nextStart = start + 2;
     nextEnd = end + 2;
+  }
+
+  if (nextValue.length > MAX_ITEM_DESCRIPTION_LENGTH) {
+    showToast(`Bold formatting would exceed the ${MAX_ITEM_DESCRIPTION_LENGTH}-character item limit.`);
+    return;
   }
 
   input.value = nextValue;
@@ -1586,15 +1795,25 @@ function renderPreview() {
     renderFormattedDescription(description, item.description || "");
     symbol.textContent = "$";
     symbol.className = "amount-symbol";
-    amount.textContent = formatAmount((Number(item.quantity) || 0) * (Number(item.price) || 0));
+    const quantity = Number(item.quantity);
+    const price = Number(item.price);
+    const validAmount = item.quantity !== ""
+      && item.price !== ""
+      && Number.isInteger(quantity)
+      && quantity >= 1
+      && quantity <= MAX_QUANTITY
+      && Number.isFinite(price)
+      && price >= 0
+      && price <= MAX_PRICE;
+    amount.textContent = validAmount ? formatAmount(quantity * price) : "-";
     amount.className = "amount-value";
     row.append(number, description, symbol, amount);
     previewItems.append(row);
   });
 
   const total = invoiceTotal();
-  setText("#previewTotal", formatAmount(total));
-  setText("#editorTotal", `$${formatAmount(total)}`);
+  setText("#previewTotal", Number.isFinite(total) ? formatAmount(total) : "-");
+  setText("#editorTotal", Number.isFinite(total) ? `$${formatAmount(total)}` : "Unavailable");
 }
 
 function handleFieldInput(event) {
@@ -1607,6 +1826,7 @@ function handleFieldInput(event) {
     if (selectionStart !== null && selectionEnd !== null) {
       event.target.setSelectionRange(selectionStart, selectionEnd);
     }
+    updateRequiredTextValidity(event.target);
   }
   state[field] = event.target.value;
   if (field === "pdfFileName") {
@@ -1692,17 +1912,24 @@ async function newInvoice() {
     && !hasUnsavedDraft()
     && state.invoiceDate === isoDate(new Date());
   if (canUseCurrentBlankDraft) {
-    saveStatus.textContent = "Draft ready";
-    showEditorPage("new");
+    try {
+      state = await createLocalInvoiceDraft({ reserve: true });
+      fillForm();
+      saveStatus.textContent = "Draft ready";
+      showEditorPage("new");
+    } catch (error) {
+      showToast(error?.message || "A new invoice number could not be reserved.");
+    }
     return;
   }
   if (!canReplaceCurrentDraft("Start a new invoice and replace the current unsaved draft?")) return;
   clearValidationErrors();
   try {
+    const nextState = await createLocalInvoiceDraft({ reserve: true });
     await deleteStoredDraft();
-    state = await createLocalInvoiceDraft();
-  } catch {
-    showToast("A new invoice could not be created. Check browser storage and try again.");
+    state = nextState;
+  } catch (error) {
+    showToast(error?.message || "A new invoice could not be created. Check browser storage and try again.");
     return;
   }
   draftChanged = false;
@@ -1723,10 +1950,11 @@ async function clearSavedDraft() {
 async function resetDraft() {
   clearTimeout(saveTimer);
   try {
+    const nextState = await createLocalInvoiceDraft();
     await deleteStoredDraft();
-    state = await createLocalInvoiceDraft();
-  } catch {
-    showToast("The draft could not be deleted. Check browser storage and try again.");
+    state = nextState;
+  } catch (error) {
+    showToast(error?.message || "The draft could not be replaced. Check browser storage and try again.");
     return false;
   }
   draftChanged = false;
@@ -1803,6 +2031,8 @@ function clearFieldError(input) {
 
 function validateForm() {
   form.querySelectorAll('[aria-invalid="true"]').forEach(clearFieldError);
+  updateRequiredTextValidity(document.querySelector("#invoiceNumber"));
+  updateRequiredTextValidity(document.querySelector("#billTo"));
   const invalidInputs = [...form.querySelectorAll("[required]")].filter((input) => !input.validity.valid);
   const dueDate = document.querySelector("#dueDate");
   if (hasInvalidDateOrder() && !invalidInputs.includes(dueDate)) invalidInputs.push(dueDate);
@@ -1814,13 +2044,15 @@ function viewPreview() {
   const previewPanel = document.querySelector("#preview-panel");
   document.querySelector("#invoiceNumber").value = state.invoiceNumber || "";
   renderPreview();
-  previewPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+  const behavior = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
+  previewPanel.scrollIntoView({ behavior, block: "start" });
   previewPanel.focus({ preventScroll: true });
 }
 
 function viewEditor() {
   fillForm();
-  document.querySelector("#editorTitle").scrollIntoView({ behavior: "smooth", block: "start" });
+  const behavior = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
+  document.querySelector("#editorTitle").scrollIntoView({ behavior, block: "start" });
   document.querySelector("#editorTitle").focus({ preventScroll: true });
 }
 
@@ -1839,6 +2071,16 @@ function invoiceIsReady(action) {
     showToast("This invoice is too long for the one-page template. Shorten an item or remove a row.");
     return false;
   }
+  state.invoiceNumber = state.invoiceNumber.trim();
+  state.billTo = state.billTo.trim();
+  document.querySelector("#invoiceNumber").value = state.invoiceNumber;
+  document.querySelector("#billTo").value = state.billTo;
+  if (!state.pdfFileNameCustomized) {
+    state.pdfFileName = state.invoiceNumber;
+    pdfFileNameInput.value = state.invoiceNumber;
+  }
+  renderPreview();
+  hideToast();
   return true;
 }
 
@@ -1874,6 +2116,38 @@ function setOutputBusy(isBusy) {
   cancelOutputDialogButton.disabled = isBusy;
   savePdfButtonLabel.textContent = isBusy ? "Creating PDF..." : "Save as PDF";
   outputDialog.setAttribute("aria-busy", String(isBusy));
+}
+
+function pdfSearchText(value) {
+  return String(value || "")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\x20-\x7e]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function addSearchablePdfText(pdf) {
+  if (typeof pdf?.text !== "function") return;
+  const lines = [
+    "INVOICE",
+    `Invoice Number: ${pdfSearchText(state.invoiceNumber)}`,
+    `Invoice Date: ${formatDate(state.invoiceDate)}`,
+    `Invoice Due Date: ${formatDate(state.dueDate)}`,
+    "BILL FROM: TIONG BAHRU SERVICED APARTMENTS PTE LTD, UEN 201420098R",
+    `BILL TO: ${pdfSearchText(state.billTo)}`,
+    ...state.items.map((item, index) => (
+      `${index + 1}. ${pdfSearchText(stripBoldMarkers(item.description))} - SGD ${formatAmount(Number(item.quantity) * Number(item.price))}`
+    )),
+    `TOTAL: SGD ${formatAmount(invoiceTotal())}`,
+    "Payments for weekend market space bookings are non-refundable upon confirmation.",
+    "PAYNOW: TIONG BAHRU SERVICED APARTMENTS PTE LTD, UEN 201420098R",
+    "sgtbsapl@gmail.com - instagram.com/enghoonresidences",
+  ];
+  if (typeof pdf.setFont === "function") pdf.setFont("helvetica", "normal");
+  if (typeof pdf.setFontSize === "function") pdf.setFontSize(3);
+  pdf.text(lines, 2, 2, { renderingMode: "invisible", lineHeightFactor: 1 });
+  if (typeof pdf.setLanguage === "function") pdf.setLanguage("en-SG");
 }
 
 function loadPdfLibrary() {
@@ -1930,6 +2204,12 @@ async function downloadInvoicePdf() {
     await worker
       .get("pdf")
       .then((pdf) => {
+        try {
+          addSearchablePdfText(pdf);
+        } catch {
+          // Keep the visual PDF available if an older PDF engine does not
+          // support invisible searchable text.
+        }
         pdf.setProperties({
           title: pdfBaseName,
           subject: `Invoice ${state.invoiceNumber}`,
@@ -1974,6 +2254,12 @@ function showToast(message) {
   toastTimer = window.setTimeout(() => {
     toast.hidden = true;
   }, 3200);
+}
+
+function hideToast() {
+  clearTimeout(toastTimer);
+  toast.hidden = true;
+  toast.textContent = "";
 }
 
 function updatePreviewScale() {
@@ -2048,7 +2334,12 @@ invoiceHistoryList.addEventListener("click", (event) => {
     return;
   }
   const duplicateButton = event.target.closest("[data-duplicate-invoice]");
-  if (duplicateButton) duplicateSavedInvoice(duplicateButton.dataset.duplicateInvoice);
+  if (duplicateButton) {
+    duplicateSavedInvoice(duplicateButton.dataset.duplicateInvoice);
+    return;
+  }
+  const deleteButton = event.target.closest("[data-delete-invoice]");
+  if (deleteButton) deleteSavedInvoice(deleteButton.dataset.deleteInvoice);
 });
 invoiceSearch.addEventListener("input", () => {
   clearTimeout(historySearchTimer);
@@ -2063,6 +2354,25 @@ invoiceSearch.addEventListener("input", () => {
 });
 loadMoreInvoicesButton.addEventListener("click", () => loadInvoiceHistory());
 retryHistoryButton.addEventListener("click", () => loadInvoiceHistory({ reset: invoiceHistory.length === 0 }));
+exportDataButton.addEventListener("click", () => {
+  try {
+    downloadLocalBackup();
+  } catch (error) {
+    showToast(error?.message || "The backup could not be created.");
+  }
+});
+importDataButton.addEventListener("click", requestBackupRestore);
+recoveryExportButton.addEventListener("click", () => {
+  try {
+    downloadLocalBackup({ recovery: true });
+  } catch (error) {
+    storageRecoveryDetail.textContent = error?.message || "The recovery backup could not be created.";
+  }
+});
+recoveryImportButton.addEventListener("click", requestBackupRestore);
+recoveryRetryButton.addEventListener("click", () => window.location.reload());
+recoveryClearButton.addEventListener("click", clearRecoveryData);
+importDataFile.addEventListener("change", restoreBackupFile);
 document.querySelector("#clearDraftButton").addEventListener("click", clearSavedDraft);
 printButton.addEventListener("click", openOutputDialog);
 document.querySelector("#mobilePrintButton").addEventListener("click", openOutputDialog);
@@ -2098,6 +2408,42 @@ keepCloudDraftButton.addEventListener("click", () => finishDraftConflictChoice("
 
 window.addEventListener("online", updateConnectionStatus);
 window.addEventListener("offline", updateConnectionStatus);
+window.addEventListener("storage", (event) => {
+  if (!currentUser || event.storageArea !== localStorage) return;
+  if (event.key === HISTORY_KEY || event.key === RESTORE_JOURNAL_KEY) {
+    if (currentPage === "history") loadInvoiceHistory({ reset: true });
+    else showToast("Invoice history changed in another tab. Return to Invoices to refresh it.");
+  }
+  if ([STORAGE_KEY, DRAFT_REVISION_KEY, RESTORE_JOURNAL_KEY].includes(event.key)) {
+    clearTimeout(draftStorageRefreshTimer);
+    draftStorageRefreshTimer = window.setTimeout(async () => {
+      if (currentPage !== "history") {
+        showToast("The saved draft changed in another tab. Return to Invoices to review it.");
+        return;
+      }
+      try {
+        const storedDraft = await backend.loadDraft(currentUser.id);
+        if (storedDraft?.invoice) {
+          state = normalizeInvoiceData(storedDraft.invoice) || state;
+          draftRevision = storedDraft.revision;
+          draftChanged = Boolean(state.draftDirty);
+          draftPersistenceEnabled = true;
+          editorMode = state.historyId ? "edit" : "new";
+        } else {
+          state = await createLocalInvoiceDraft();
+          draftRevision = undefined;
+          draftChanged = false;
+          draftPersistenceEnabled = false;
+          editorMode = "new";
+        }
+        fillForm();
+        renderInvoiceHistory();
+      } catch (error) {
+        if (["LOCAL_DATA_CORRUPT", "LOCAL_STORAGE_UNAVAILABLE"].includes(error?.code)) showStorageRecovery(error);
+      }
+    }, 60);
+  }
+});
 window.addEventListener("pagehide", persistDraftImmediately);
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "hidden") persistDraftImmediately();
@@ -2121,6 +2467,19 @@ installButton.addEventListener("click", async () => {
   installButton.hidden = true;
 });
 
+document.querySelector(".skip-link").addEventListener("click", () => {
+  requestAnimationFrame(() => {
+    const target = currentPage === "editor"
+      ? editorTitle
+      : currentPage === "history"
+        ? document.querySelector("#invoiceListTitle")
+        : currentPage === "recovery"
+          ? document.querySelector("#storageRecoveryTitle")
+          : document.querySelector("#authTitle");
+    target?.focus({ preventScroll: true });
+  });
+});
+
 authForm.addEventListener("submit", handleSignIn);
 createAccountButton.addEventListener("click", handleCreateAccount);
 forgotPasswordButton.addEventListener("click", handlePasswordReset);
@@ -2131,16 +2490,48 @@ passwordRecoveryForm.addEventListener("submit", handlePasswordRecovery);
 recoveryPasswordConfirm.addEventListener("input", () => recoveryPasswordConfirm.setCustomValidity(""));
 signOutButton.addEventListener("click", handleSignOut);
 
+function offerServiceWorkerUpdate(worker) {
+  if (!worker) return;
+  waitingServiceWorker = worker;
+  updateButton.hidden = false;
+}
+
+updateButton.addEventListener("click", () => {
+  if (!waitingServiceWorker) return;
+  updateButton.disabled = true;
+  updateButton.textContent = "Updating...";
+  waitingServiceWorker.postMessage({ type: "SKIP_WAITING" });
+});
+
 if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (reloadingForServiceWorker || !waitingServiceWorker) return;
+    reloadingForServiceWorker = true;
+    window.location.reload();
+  });
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("./sw.js").catch(() => {
-      showToast("Offline setup could not be completed.");
-    });
+    navigator.serviceWorker.register("./sw.js")
+      .then((registration) => {
+        if (registration.waiting) offerServiceWorkerUpdate(registration.waiting);
+        registration.addEventListener("updatefound", () => {
+          const worker = registration.installing;
+          worker?.addEventListener("statechange", () => {
+            if (worker.state === "installed" && navigator.serviceWorker.controller) offerServiceWorkerUpdate(worker);
+          });
+        });
+      })
+      .catch(() => {
+        showToast("Offline setup could not be completed.");
+      });
   });
 }
 
-const previewObserver = new ResizeObserver(updatePreviewScale);
-previewObserver.observe(previewStage);
+if ("ResizeObserver" in window) {
+  const previewObserver = new ResizeObserver(updatePreviewScale);
+  previewObserver.observe(previewStage);
+} else {
+  window.addEventListener("resize", updatePreviewScale);
+}
 window.addEventListener("beforeprint", () => {
   invoiceSheet.style.transform = "none";
 });

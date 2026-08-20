@@ -113,6 +113,7 @@ test("service-worker updates wait for an explicit activation request", async () 
   await installation;
   assert.equal(worker.skipWaitingCalls, 0);
   assert.ok(worker.cacheAdditions.includes("./index.html"));
+  assert.equal(worker.cacheAdditions.includes("./vendor/html2pdf.bundle.min.js?v=32"), false);
 
   worker.handlers.message({ data: { type: "SKIP_WAITING" } });
   assert.equal(worker.skipWaitingCalls, 1);
@@ -129,11 +130,14 @@ test("activation removes only previous Invoice Studio caches", async () => {
   worker.stores.set("invoice-studio-v32", new Map());
   worker.stores.set("invoice-studio-v33", new Map());
   worker.stores.set("invoice-studio-v34", new Map());
+  const runtimeUrl = `${SCOPE}vendor/html2pdf.bundle.min.js?v=32`;
+  worker.stores.set("invoice-studio-v35", new Map([[runtimeUrl, new Response("warmed PDF runtime")]]));
   worker.stores.set("unrelated-cache", new Map());
   let activation;
   worker.handlers.activate({ waitUntil(value) { activation = value; } });
   await activation;
-  assert.deepEqual(worker.deletedCaches, ["invoice-studio-v1", "invoice-studio-v27", "invoice-studio-v28", "invoice-studio-v29", "invoice-studio-v30", "invoice-studio-v31", "invoice-studio-v32", "invoice-studio-v33"]);
+  assert.deepEqual(worker.deletedCaches, ["invoice-studio-v1", "invoice-studio-v27", "invoice-studio-v28", "invoice-studio-v29", "invoice-studio-v30", "invoice-studio-v31", "invoice-studio-v32", "invoice-studio-v33", "invoice-studio-v34", "invoice-studio-v35"]);
+  assert.equal(await (await worker.stores.get("invoice-studio-v36").get(runtimeUrl)).text(), "warmed PDF runtime");
   assert.equal(worker.clientsClaimed, 1);
   assert.equal(worker.stores.has("unrelated-cache"), true);
 });
@@ -150,8 +154,8 @@ test("query-string navigations are network-only and never cached", async () => {
   assert.deepEqual(worker.cachePuts, []);
 });
 
-test("only named-cache shell requests are cached and used offline", async () => {
-  const shellUrl = `${SCOPE}app.js?v=32`;
+test("only managed shell and runtime requests are cached and used offline", async () => {
+  const shellUrl = `${SCOPE}app.js?v=36`;
   const worker = await loadWorker(async () => new Response("fresh shell"));
   const onlineEvent = dispatchFetch(worker.handlers.fetch, {
     method: "GET",
@@ -160,7 +164,20 @@ test("only named-cache shell requests are cached and used offline", async () => 
   });
   assert.equal(await (await onlineEvent.response()).text(), "fresh shell");
   await Promise.all(onlineEvent.lifetime);
-  assert.deepEqual(worker.cachePuts, [{ cacheName: "invoice-studio-v34", key: shellUrl }]);
+  assert.deepEqual(worker.cachePuts, [{ cacheName: "invoice-studio-v36", key: shellUrl }]);
+
+  const runtimeUrl = `${SCOPE}vendor/html2pdf.bundle.min.js?v=32`;
+  const runtimeEvent = dispatchFetch(worker.handlers.fetch, {
+    method: "GET",
+    mode: "same-origin",
+    url: runtimeUrl,
+  });
+  assert.equal(await (await runtimeEvent.response()).text(), "fresh shell");
+  await Promise.all(runtimeEvent.lifetime);
+  assert.deepEqual(worker.cachePuts, [
+    { cacheName: "invoice-studio-v36", key: shellUrl },
+    { cacheName: "invoice-studio-v36", key: runtimeUrl },
+  ]);
 
   worker.setFetch(async () => { throw new Error("offline"); });
   const offlineEvent = dispatchFetch(worker.handlers.fetch, {
@@ -181,11 +198,17 @@ test("only named-cache shell requests are cached and used offline", async () => 
 test("device-local backend persists revision-safe invoices and drafts", async () => {
   const source = await readFile(join(ROOT, "backend.js"), "utf8");
   const values = new Map();
+  let restoreFailureMode = false;
+  let restoreFailureTriggered = false;
   const localStorage = {
     getItem(key) {
       return values.has(key) ? values.get(key) : null;
     },
     setItem(key, value) {
+      if (restoreFailureMode && (restoreFailureTriggered || key === "invoice-studio-draft-v1")) {
+        restoreFailureTriggered = true;
+        throw new Error("Quota denied during restore");
+      }
       values.set(key, String(value));
     },
     removeItem(key) {
@@ -227,6 +250,13 @@ test("device-local backend persists revision-safe invoices and drafts", async ()
   const page = await backend.listInvoices("local-guest", { query: "updated" });
   assert.equal(page.total, 1);
   assert.equal(page.records[0].invoice.billTo, "Updated customer");
+  const duplicate = await backend.saveInvoice("local-guest", {
+    id: "invoice-2",
+    createdAt: "2026-08-20T00:00:00.000Z",
+    invoice: { ...updated.invoice },
+  });
+  assert.equal(duplicate.invoice.invoiceNumber, updated.invoice.invoiceNumber);
+  assert.equal((await backend.listInvoices("local-guest")).total, 2);
 
   const firstDraft = await backend.saveDraft("local-guest", invoice);
   assert.equal(firstDraft.revision, 1);
@@ -243,4 +273,59 @@ test("device-local backend persists revision-safe invoices and drafts", async ()
 
   const invoiceNumber = await backend.nextInvoiceNumber("2026-08-19");
   assert.equal(invoiceNumber, "EHR-20260819-002");
+  assert.equal(values.has("invoice-studio-sequence-v1"), false, "previewing the next number must not consume it");
+  assert.equal(await backend.reserveInvoiceNumber("2026-08-19"), "EHR-20260819-002");
+  assert.equal(JSON.parse(values.get("invoice-studio-sequence-v1")).sequence, 2, "opening a new invoice reserves its number");
+  values.delete("invoice-studio-sequence-v1");
+
+  const backup = backend.exportLocalData();
+  await assert.rejects(
+    backend.deleteInvoice("local-guest", duplicate.id, 99),
+    (error) => error.code === "INVOICE_REVISION_CONFLICT",
+  );
+  assert.equal(await backend.deleteInvoice("local-guest", duplicate.id, duplicate.revision), true);
+  assert.equal((await backend.listInvoices("local-guest")).total, 1);
+  backend.restoreLocalData(backup);
+  assert.equal((await backend.listInvoices("local-guest")).total, 2);
+
+  const duplicateIds = JSON.parse(values.get("invoice-studio-history-v1"));
+  duplicateIds[1].id = duplicateIds[0].id;
+  values.set("invoice-studio-history-v1", JSON.stringify(duplicateIds));
+  const repaired = await backend.listInvoices("local-guest");
+  assert.equal(repaired.total, 2);
+  assert.equal(new Set(repaired.records.map((record) => record.id)).size, 2);
+  for (const record of repaired.records) {
+    assert.equal(await backend.deleteInvoice("local-guest", record.id, record.revision), true);
+  }
+  assert.equal(values.has("invoice-studio-sequence-v1"), true, "deleting a committed invoice must preserve its sequence");
+  assert.equal(await backend.nextInvoiceNumber("2026-08-19"), "EHR-20260819-002");
+
+  await backend.saveInvoice("local-guest", { id: "protected-invoice", invoice });
+  await backend.saveDraft("local-guest", { ...invoice, billTo: "Protected draft" });
+  const protectedBackup = backend.exportLocalData();
+  const replacementBackup = {
+    ...protectedBackup,
+    history: [{ id: "replacement-invoice", invoice: { ...invoice, billTo: "Replacement" } }],
+    draft: { ...invoice, billTo: "Replacement draft" },
+  };
+  restoreFailureMode = true;
+  await assert.rejects(
+    Promise.resolve().then(() => backend.restoreLocalData(replacementBackup)),
+    (error) => error.code === "LOCAL_STORAGE_UNAVAILABLE",
+  );
+  assert.equal(JSON.stringify(backend.exportLocalData()), JSON.stringify(protectedBackup), "a failed restore must expose the complete earlier dataset");
+  restoreFailureMode = false;
+  await backend.getSession();
+  assert.equal(values.has("invoice-studio-restore-journal-v1"), false);
+  assert.equal(JSON.stringify(backend.exportLocalData()), JSON.stringify(protectedBackup));
+
+  values.set("invoice-studio-history-v1", "{broken-json");
+  await assert.rejects(
+    backend.listInvoices("local-guest"),
+    (error) => error.code === "LOCAL_DATA_CORRUPT" && error.storageKey === "invoice-studio-history-v1",
+  );
+  const recoveryBackup = backend.exportLocalData();
+  assert.equal(recoveryBackup.history.unreadableRawValue, "{broken-json");
+  backend.clearLocalData();
+  assert.equal((await backend.listInvoices("local-guest")).total, 0);
 });

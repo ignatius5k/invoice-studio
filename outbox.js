@@ -5,6 +5,7 @@
   const DATABASE_VERSION = 1;
   const STORE_NAME = "draft-outbox";
   let databasePromise;
+  const memoryFallback = new Map();
 
   function operationId() {
     if (typeof crypto?.randomUUID === "function") return crypto.randomUUID();
@@ -55,19 +56,32 @@
 
   async function read(userId) {
     if (!userId) return null;
-    const database = await openDatabase();
-    const transaction = database.transaction(STORE_NAME, "readonly");
-    const value = await requestResult(transaction.objectStore(STORE_NAME).get(userId));
-    await transactionComplete(transaction);
-    return value || null;
+    try {
+      const database = await openDatabase();
+      const transaction = database.transaction(STORE_NAME, "readonly");
+      const value = await requestResult(transaction.objectStore(STORE_NAME).get(userId));
+      await transactionComplete(transaction);
+      return value || memoryFallback.get(userId) || null;
+    } catch {
+      return memoryFallback.get(userId) || null;
+    }
   }
 
   async function write(operation) {
-    const database = await openDatabase();
-    const transaction = database.transaction(STORE_NAME, "readwrite");
-    transaction.objectStore(STORE_NAME).put(operation);
-    await transactionComplete(transaction);
-    return operation;
+    const memoryOperation = { ...operation, storage: "memory" };
+    memoryFallback.set(operation.userId, memoryOperation);
+    try {
+      const database = await openDatabase();
+      const transaction = database.transaction(STORE_NAME, "readwrite");
+      transaction.objectStore(STORE_NAME).put(operation);
+      await transactionComplete(transaction);
+      memoryFallback.delete(operation.userId);
+      return { ...operation, storage: "indexeddb" };
+    } catch {
+      // The in-memory copy still lets the local backend flush this operation
+      // when IndexedDB is blocked or unavailable for the current session.
+      return memoryOperation;
+    }
   }
 
   function operationFor(userId, type, invoice, expectedRevision) {
@@ -95,16 +109,30 @@
   }
 
   async function updateMatching(userId, expectedOperationId, updater) {
-    const database = await openDatabase();
-    const transaction = database.transaction(STORE_NAME, "readwrite");
-    const store = transaction.objectStore(STORE_NAME);
-    const current = await requestResult(store.get(userId));
+    const memoryValue = memoryFallback.get(userId) || null;
+    let database;
+    let transaction;
+    let store;
+    let storedValue = null;
+    try {
+      database = await openDatabase();
+      transaction = database.transaction(STORE_NAME, "readwrite");
+      store = transaction.objectStore(STORE_NAME);
+      storedValue = await requestResult(store.get(userId));
+    } catch {}
+    const current = storedValue || memoryValue;
     let updated = null;
     if (current && (!expectedOperationId || current.operationId === expectedOperationId)) {
       updated = updater(current) || current;
-      store.put(updated);
+      memoryFallback.set(userId, updated);
+      store?.put(updated);
     }
-    await transactionComplete(transaction);
+    if (transaction) {
+      try {
+        await transactionComplete(transaction);
+        if (updated) memoryFallback.delete(userId);
+      } catch {}
+    }
     return updated;
   }
 
@@ -128,13 +156,27 @@
   }
 
   async function remove(userId, expectedOperationId) {
-    const database = await openDatabase();
-    const transaction = database.transaction(STORE_NAME, "readwrite");
-    const store = transaction.objectStore(STORE_NAME);
-    const current = await requestResult(store.get(userId));
+    let database;
+    let transaction;
+    let store;
+    let storedValue = null;
+    try {
+      database = await openDatabase();
+      transaction = database.transaction(STORE_NAME, "readwrite");
+      store = transaction.objectStore(STORE_NAME);
+      storedValue = await requestResult(store.get(userId));
+    } catch {}
+    const current = storedValue || memoryFallback.get(userId) || null;
     const removed = Boolean(current && (!expectedOperationId || current.operationId === expectedOperationId));
-    if (removed) store.delete(userId);
-    await transactionComplete(transaction);
+    if (removed) {
+      memoryFallback.delete(userId);
+      store?.delete(userId);
+    }
+    if (transaction) {
+      try {
+        await transactionComplete(transaction);
+      } catch {}
+    }
     return removed;
   }
 
