@@ -176,6 +176,7 @@ test("guest entry, invoice editor, responsive layout, draft, print, and offline 
 
   await evaluate(page, "localStorage.clear(); location.reload(); true");
   await waitFor(() => evaluate(page, "document.readyState === 'complete' && document.body.dataset.page === 'history' && document.querySelectorAll('.item-row').length === 1"), 8000);
+  await page.send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
   const landingState = JSON.parse(await evaluate(page, `JSON.stringify({
     page: document.body.dataset.page,
     historyVisible: !document.querySelector('#invoiceListPage').hidden,
@@ -185,7 +186,7 @@ test("guest entry, invoice editor, responsive layout, draft, print, and offline 
     createActions: ['newInvoiceButton', 'historyNewInvoiceButton', 'emptyStateNewInvoiceButton']
       .filter(id => document.getElementById(id).getClientRects().length > 0).length
   })`));
-  assert.deepEqual(landingState, { page: "history", historyVisible: true, editorHidden: true, emptyState: true, count: "0 invoices", createActions: 1 });
+  assert.deepEqual(landingState, { page: "history", historyVisible: true, editorHidden: true, emptyState: true, count: "0 invoices", createActions: 2 });
   for (const width of [320, 390, 700, 1000, 1440]) {
     await page.send("Emulation.setDeviceMetricsOverride", { width, height: 900, deviceScaleFactor: 1, mobile: width < 500 });
     const historyLayout = JSON.parse(await evaluate(page, `JSON.stringify({
