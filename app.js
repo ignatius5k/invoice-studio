@@ -9,7 +9,7 @@ const MAX_ITEM_DESCRIPTION_LENGTH = 1000;
 const MAX_BILL_TO_LENGTH = 2000;
 const HISTORY_PAGE_SIZE = 25;
 const DRAFT_RETRY_MAX_DELAY = 30000;
-const PDF_LIBRARY_URL = "./vendor/html2pdf.bundle.min.js?v=29";
+const PDF_LIBRARY_URL = "./vendor/html2pdf.bundle.min.js?v=30";
 const backend = window.invoiceBackend;
 const draftOutbox = window.invoiceDraftOutbox;
 
@@ -123,6 +123,7 @@ let authBusy = false;
 let pendingAuthEmailRequest = "";
 let pendingAuthEmailRequestUntil = 0;
 let authEmailRequestsBlockedUntil = 0;
+let printPreviousTitle;
 
 function normalizeInvoiceData(value) {
   if (!value || !Array.isArray(value.items) || value.items.length === 0) return null;
@@ -136,7 +137,7 @@ function normalizeInvoiceData(value) {
     pdfFileNameCustomized: Boolean(savedPdfFileName && savedPdfFileName !== invoiceNumber),
     invoiceDate: String(value.invoiceDate || ""),
     dueDate: String(value.dueDate || ""),
-    billTo: String(value.billTo || "").slice(0, MAX_BILL_TO_LENGTH),
+    billTo: String(value.billTo || "").toLocaleUpperCase("en-SG").slice(0, MAX_BILL_TO_LENGTH),
     items: value.items.slice(0, 5).map((item, index) => ({
       id: String(item?.id || `item-${Date.now()}-${index}`).slice(0, 160),
       quantity: normalizeDraftQuantity(item?.quantity),
@@ -1570,7 +1571,7 @@ function renderPreview() {
 function handleFieldInput(event) {
   const field = event.target.dataset.field;
   if (!field) return;
-  if (field === "invoiceNumber") {
+  if (field === "invoiceNumber" || field === "billTo") {
     const selectionStart = event.target.selectionStart;
     const selectionEnd = event.target.selectionEnd;
     event.target.value = event.target.value.toLocaleUpperCase("en-SG");
@@ -1647,7 +1648,10 @@ function isoDate(date) {
 }
 
 async function newInvoice() {
-  const canUseCurrentBlankDraft = currentPage === "history" && !state.historyId && !hasUnsavedDraft();
+  const canUseCurrentBlankDraft = currentPage === "history"
+    && !state.historyId
+    && !hasUnsavedDraft()
+    && state.invoiceDate === isoDate(new Date());
   if (canUseCurrentBlankDraft) {
     saveStatus.textContent = "Draft ready";
     showEditorPage("new");
@@ -1769,11 +1773,14 @@ function validateForm() {
 
 function viewPreview() {
   const previewPanel = document.querySelector("#preview-panel");
+  document.querySelector("#invoiceNumber").value = state.invoiceNumber || "";
+  renderPreview();
   previewPanel.scrollIntoView({ behavior: "smooth", block: "start" });
   previewPanel.focus({ preventScroll: true });
 }
 
 function viewEditor() {
+  fillForm();
   document.querySelector("#editorTitle").scrollIntoView({ behavior: "smooth", block: "start" });
   document.querySelector("#editorTitle").focus({ preventScroll: true });
 }
@@ -1888,7 +1895,7 @@ async function downloadInvoicePdf() {
           title: pdfBaseName,
           subject: `Invoice ${state.invoiceNumber}`,
           author: "Eng Hoon Residences",
-          creator: "Eng Hoon Residences Invoice Studio",
+          creator: "Eng Hoon Residences",
         });
       })
       .save();
@@ -1910,12 +1917,15 @@ function printInvoice() {
     return;
   }
   dismissOutputDialog();
-  const previousTitle = document.title;
+  if (printPreviousTitle === undefined) printPreviousTitle = document.title;
   document.title = `${safePdfFileName(state.pdfFileName, state.invoiceNumber)}.pdf`;
   window.print();
-  window.setTimeout(() => {
-    document.title = previousTitle;
-  }, 500);
+}
+
+function restorePrintTitle() {
+  if (printPreviousTitle === undefined) return;
+  document.title = printPreviousTitle;
+  printPreviousTitle = undefined;
 }
 
 function showToast(message) {
@@ -2094,7 +2104,10 @@ previewObserver.observe(previewStage);
 window.addEventListener("beforeprint", () => {
   invoiceSheet.style.transform = "none";
 });
-window.addEventListener("afterprint", updatePreviewScale);
+window.addEventListener("afterprint", () => {
+  restorePrintTitle();
+  updatePreviewScale();
+});
 
 updateConnectionStatus();
 updatePreviewScale();

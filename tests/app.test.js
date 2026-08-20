@@ -210,6 +210,7 @@ test("guest entry, invoice editor, responsive layout, draft, print, and offline 
     pdfFileName: document.querySelector('#pdfFileName').value,
     invoiceDate: document.querySelector('#invoiceDate').value,
     dueDate: document.querySelector('#dueDate').value,
+    today: (() => { const now = new Date(); return [now.getFullYear(), String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0')].join('-'); })(),
     billTo: document.querySelector('#billTo').value,
     description: document.querySelector('[data-item-field="description"]').value,
     price: document.querySelector('[data-item-field="price"]').value
@@ -218,8 +219,36 @@ test("guest entry, invoice editor, responsive layout, draft, print, and offline 
   assert.match(initial.invoiceNumber, /^EHR-\d{8}-001$/);
   assert.equal(initial.pdfFileName, initial.invoiceNumber);
   assert.match(initial.invoiceDate, /^\d{4}-\d{2}-\d{2}$/);
+  assert.equal(initial.invoiceDate, initial.today);
   assert.match(initial.dueDate, /^\d{4}-\d{2}-\d{2}$/);
   assert.deepEqual({ billTo: initial.billTo, description: initial.description, price: initial.price }, { billTo: "", description: "", price: "" });
+
+  await evaluate(page, `(() => {
+    localStorage.setItem('test-supabase-draft', JSON.stringify({
+      revision: 1,
+      invoice: {
+        draftDirty: false,
+        invoiceNumber: 'EHR-20000101-001',
+        pdfFileName: 'EHR-20000101-001',
+        pdfFileNameCustomized: false,
+        invoiceDate: '2000-01-01',
+        dueDate: '2000-01-08',
+        billTo: '',
+        items: [{ id: 'stale-blank-item', quantity: 1, description: '', price: '' }]
+      }
+    }));
+    location.reload();
+  })()`);
+  await waitFor(() => evaluate(page, "document.body.dataset.page === 'history'"));
+  await evaluate(page, "document.querySelector('#historyNewInvoiceButton').click(); true");
+  await waitFor(() => evaluate(page, "document.body.dataset.page === 'editor' && document.querySelector('#invoiceDate').value !== '2000-01-01'"));
+  const refreshedBlankDraft = JSON.parse(await evaluate(page, `JSON.stringify({
+    invoiceNumber: document.querySelector('#invoiceNumber').value,
+    invoiceDate: document.querySelector('#invoiceDate').value,
+    today: (() => { const now = new Date(); return [now.getFullYear(), String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0')].join('-'); })()
+  })`));
+  assert.equal(refreshedBlankDraft.invoiceDate, refreshedBlankDraft.today);
+  assert.notEqual(refreshedBlankDraft.invoiceNumber, "EHR-20000101-001");
 
   const semantics = JSON.parse(await evaluate(page, `JSON.stringify({
     legends: [...document.querySelectorAll('fieldset')].map(fieldset => ({
@@ -276,6 +305,24 @@ test("guest entry, invoice editor, responsive layout, draft, print, and offline 
   })()`));
   assert.deepEqual(filenameBehavior, { number: "INV-SYNC-2", synced: "INV-SYNC-1", customized: "Client custom", autocapitalize: "characters", spellcheck: false });
 
+  const uppercaseName = JSON.parse(await evaluate(page, `(() => {
+    const customer = document.querySelector('#billTo');
+    customer.value = 'Hanoa (@hanoa_sg)';
+    customer.dispatchEvent(new Event('input', { bubbles: true }));
+    return JSON.stringify({
+      field: customer.value,
+      preview: document.querySelector('#previewBillTo').textContent,
+      autocapitalize: customer.autocapitalize,
+      spellcheck: customer.spellcheck
+    });
+  })()`));
+  assert.deepEqual(uppercaseName, {
+    field: "HANOA (@HANOA_SG)",
+    preview: "HANOA (@HANOA_SG)",
+    autocapitalize: "characters",
+    spellcheck: false,
+  });
+
   for (const width of [320, 375, 390, 700, 701, 1024, 1080, 1081, 1200, 1201, 1280, 1440]) {
     await page.send("Emulation.setDeviceMetricsOverride", { width, height: 900, deviceScaleFactor: 1, mobile: width < 500 });
     await new Promise((resolve) => setTimeout(resolve, 60));
@@ -315,6 +362,13 @@ test("guest entry, invoice editor, responsive layout, draft, print, and offline 
           const rect = row.getBoundingClientRect();
           return rect.left >= section.left - 1 && rect.right <= section.right + 1;
         });
+      })(),
+      itemFieldsInside: (() => {
+        const section = document.querySelector('.items-section').getBoundingClientRect();
+        return [...document.querySelectorAll('.item-row .mobile-field, .item-row input, .item-row textarea')].every(element => {
+          const rect = element.getBoundingClientRect();
+          return rect.width > 0 && rect.left >= section.left - 1 && rect.right <= section.right + 1;
+        });
       })()
     })`);
     const measured = JSON.parse(layout);
@@ -332,6 +386,7 @@ test("guest entry, invoice editor, responsive layout, draft, print, and offline 
       assert.ok(measured.editorWidth >= 460, `${width}px split editor should remain usable`);
     }
     assert.equal(measured.itemInside, true, `${width}px item row must remain inside its section`);
+    assert.equal(measured.itemFieldsInside, true, `${width}px quantity, description, and price fields must remain visible inside their section`);
     assert.deepEqual(measured.mobileLabels.map((label) => label.text), ["Quantity", "Item 1", "Unit price (SGD)"]);
     assert.ok(measured.mobileLabels.every((label) => label.target));
     assert.ok(measured.mobileLabels.every((label) => label.visible === (width <= 700)));
@@ -385,7 +440,9 @@ test("guest entry, invoice editor, responsive layout, draft, print, and offline 
     targetTop: document.querySelector('#preview-panel').getBoundingClientRect().top,
     targetVisible: (() => { const rect = document.querySelector('#preview-panel').getBoundingClientRect(); return rect.top < innerHeight && rect.bottom > 72; })(),
     outlineWidth: getComputedStyle(document.querySelector('#preview-panel')).outlineWidth,
-    scrollMarginTop: getComputedStyle(document.querySelector('#preview-panel')).scrollMarginTop
+    scrollMarginTop: getComputedStyle(document.querySelector('#preview-panel')).scrollMarginTop,
+    editorNumber: document.querySelector('#invoiceNumber').value,
+    previewNumber: document.querySelector('#previewInvoiceNumber').textContent
   })`));
   assert.equal(previewNavigation.prints, 0);
   assert.equal(previewNavigation.focused, "preview-panel");
@@ -393,6 +450,8 @@ test("guest entry, invoice editor, responsive layout, draft, print, and offline 
   assert.ok(Math.abs(previewNavigation.scrollY - previewClickStart.scrollY) > 1);
   assert.equal(previewNavigation.outlineWidth, "3px");
   assert.equal(previewNavigation.scrollMarginTop, "72px");
+  assert.equal(previewNavigation.editorNumber, "INV-SYNC-2");
+  assert.equal(previewNavigation.previewNumber, "INV-SYNC-2");
 
   const previewInspection = JSON.parse(await evaluate(page, `(() => {
     const actual = document.querySelector('#actualSizePreviewButton');
@@ -410,7 +469,13 @@ test("guest entry, invoice editor, responsive layout, draft, print, and offline 
       pressed: document.querySelector('#fitPreviewButton').getAttribute('aria-pressed')
     };
     document.querySelector('#backToEditorButton').click();
-    return JSON.stringify({ actualState, fitState, focused: document.activeElement.id });
+    return JSON.stringify({
+      actualState,
+      fitState,
+      focused: document.activeElement.id,
+      editorNumber: document.querySelector('#invoiceNumber').value,
+      previewNumber: document.querySelector('#previewInvoiceNumber').textContent
+    });
   })()`));
   assert.equal(previewInspection.actualState.transform, "scale(1)");
   assert.equal(previewInspection.actualState.pressed, "true");
@@ -419,6 +484,8 @@ test("guest entry, invoice editor, responsive layout, draft, print, and offline 
   assert.notEqual(previewInspection.fitState.transform, "scale(1)");
   assert.equal(previewInspection.fitState.pressed, "true");
   assert.equal(previewInspection.focused, "editorTitle");
+  assert.equal(previewInspection.editorNumber, "INV-SYNC-2");
+  assert.equal(previewInspection.previewNumber, "INV-SYNC-2");
   await page.send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
 
   await evaluate(page, `(() => {
@@ -532,7 +599,7 @@ test("guest entry, invoice editor, responsive layout, draft, print, and offline 
     window.dispatchEvent(new PageTransitionEvent('pagehide'));
     location.reload();
   })()`);
-  await waitFor(() => evaluate(page, "document.readyState === 'complete' && document.querySelector('#billTo').value === 'Immediate reload customer'"));
+  await waitFor(() => evaluate(page, "document.readyState === 'complete' && document.querySelector('#billTo').value === 'IMMEDIATE RELOAD CUSTOMER'"));
 
   await new Promise((resolve) => setTimeout(resolve, 300));
   await evaluate(page, "location.reload(); true");
@@ -602,7 +669,7 @@ test("guest entry, invoice editor, responsive layout, draft, print, and offline 
     while (document.querySelector('#invoiceNumber').value === before) await new Promise(resolve => setTimeout(resolve, 0));
     return JSON.stringify({ before, cancelled, after: document.querySelector('#invoiceNumber').value, pdfAfter: document.querySelector('#pdfFileName').value, billToAfter: document.querySelector('#billTo').value });
   })()`));
-  assert.deepEqual(newInvoiceProtection.cancelled, { number: newInvoiceProtection.before, billTo: "Keep me" });
+  assert.deepEqual(newInvoiceProtection.cancelled, { number: newInvoiceProtection.before, billTo: "KEEP ME" });
   assert.notEqual(newInvoiceProtection.after, newInvoiceProtection.before);
   assert.equal(newInvoiceProtection.pdfAfter, newInvoiceProtection.after);
   assert.equal(newInvoiceProtection.billToAfter, "");
@@ -669,6 +736,7 @@ test("guest entry, invoice editor, responsive layout, draft, print, and offline 
 
   const printCount = await evaluate(page, `(async () => {
     window.__prints = 0; window.__printedTitle = ''; window.print = () => { window.__prints += 1; window.__printedTitle = document.title; };
+    const titleBeforePrint = document.title;
     const values = { invoiceNumber: 'INV-1', pdfFileName: 'August / Brew Invoice.pdf', invoiceDate: '2026-08-20', dueDate: '2026-08-13', billTo: 'Customer' };
     for (const [id, value] of Object.entries(values)) { const input = document.querySelector('#' + id); input.value = value; input.dispatchEvent(new Event('input', { bubbles: true })); }
     const description = document.querySelector('[data-item-field="description"]'); description.value = 'Service'; description.dispatchEvent(new Event('input', { bubbles: true }));
@@ -695,9 +763,35 @@ test("guest entry, invoice editor, responsive layout, draft, print, and offline 
       printsBeforeChoice: window.__prints
     };
     document.querySelector('#printNowButton').click();
-    return JSON.stringify({ rejected, clearedInvoiceDate, clearedDueDate, recovered, dialog, prints: window.__prints, printedTitle: window.__printedTitle, focused: document.activeElement.id, invalid: document.querySelectorAll('[aria-invalid="true"]').length });
+    const titleDuringPrint = document.title;
+    window.dispatchEvent(new Event('afterprint'));
+    return JSON.stringify({
+      rejected,
+      clearedInvoiceDate,
+      clearedDueDate,
+      recovered,
+      dialog,
+      prints: window.__prints,
+      printedTitle: window.__printedTitle,
+      titleBeforePrint,
+      titleDuringPrint,
+      titleAfterPrint: document.title,
+      focused: document.activeElement.id,
+      invalid: document.querySelectorAll('[aria-invalid="true"]').length
+    });
   })()`);
-  assert.deepEqual(JSON.parse(printCount), {
+  const printBehavior = JSON.parse(printCount);
+  assert.deepEqual({
+    rejected: printBehavior.rejected,
+    clearedInvoiceDate: printBehavior.clearedInvoiceDate,
+    clearedDueDate: printBehavior.clearedDueDate,
+    recovered: printBehavior.recovered,
+    dialog: printBehavior.dialog,
+    prints: printBehavior.prints,
+    printedTitle: printBehavior.printedTitle,
+    focused: printBehavior.focused,
+    invalid: printBehavior.invalid,
+  }, {
     rejected: { prints: 0, focused: "dueDate", message: "Due date cannot be earlier than the invoice date.", describedBy: "error-dueDate" },
     clearedInvoiceDate: { invalid: false, errorExists: false, describedBy: null },
     clearedDueDate: { invalid: false, errorExists: false, describedBy: null },
@@ -708,6 +802,17 @@ test("guest entry, invoice editor, responsive layout, draft, print, and offline 
     focused: "printButton",
     invalid: 0,
   });
+  assert.equal(printBehavior.titleDuringPrint, "August - Brew Invoice.pdf");
+  assert.equal(printBehavior.titleAfterPrint, printBehavior.titleBeforePrint);
+
+  const browserPrintResult = await page.send("Page.printToPDF", {
+    displayHeaderFooter: false,
+    printBackground: true,
+    preferCSSPageSize: true,
+  });
+  const browserPrintPdf = Buffer.from(browserPrintResult.data, "base64");
+  assert.equal(browserPrintPdf.subarray(0, 4).toString(), "%PDF");
+  assert.equal((browserPrintPdf.toString("latin1").match(/\/Type \/Page\b/g) || []).length, 1);
 
   assert.equal(await evaluate(page, "typeof window.html2pdf"), "undefined");
   assert.equal(await evaluate(page, "document.querySelector('script[data-pdf-library]') === null"), true);
@@ -747,7 +852,7 @@ test("guest entry, invoice editor, responsive layout, draft, print, and offline 
   await waitFor(() => evaluate(page, "typeof window.html2pdf === 'function'"));
   assert.equal(
     await evaluate(page, "document.querySelector('script[data-pdf-library=\"html2pdf\"]')?.getAttribute('src')"),
-    "./vendor/html2pdf.bundle.min.js?v=29",
+    "./vendor/html2pdf.bundle.min.js?v=30",
   );
   await waitFor(async () => {
     try {
@@ -800,7 +905,7 @@ test("guest entry, invoice editor, responsive layout, draft, print, and offline 
     fileName: "August - Brew Invoice.pdf",
     format: "a4",
     title: "August - Brew Invoice",
-    creator: "Eng Hoon Residences Invoice Studio",
+    creator: "Eng Hoon Residences",
     element: { id: "", transform: "none", width: "793px" },
     saved: true,
     busy: "false",
@@ -856,14 +961,14 @@ test("guest entry, invoice editor, responsive layout, draft, print, and offline 
   assert.equal(historyBehavior.initial.page, "history");
   assert.equal(historyBehavior.initial.count, 1);
   assert.equal(historyBehavior.initial.number, "INV-1");
-  assert.equal(historyBehavior.initial.customer, "Customer");
+  assert.equal(historyBehavior.initial.customer, "CUSTOMER");
   assert.equal(historyBehavior.initial.total, "$50.00");
   assert.equal(historyBehavior.initial.titleTag, "H3");
   assert.ok(historyBehavior.initial.semanticLabel);
   assert.equal(historyBehavior.initial.createActions, 1);
-  assert.deepEqual(historyBehavior.afterEdit, { count: 1, customer: "Updated Customer" });
+  assert.deepEqual(historyBehavior.afterEdit, { count: 1, customer: "UPDATED CUSTOMER" });
   assert.notEqual(historyBehavior.duplicate.number, historyBehavior.sourceNumber);
-  assert.equal(historyBehavior.duplicate.customer, "Updated Customer");
+  assert.equal(historyBehavior.duplicate.customer, "UPDATED CUSTOMER");
   assert.equal(historyBehavior.duplicate.title, "Review duplicated invoice");
   assert.equal(historyBehavior.afterDuplicate.count, 2);
   assert.ok(historyBehavior.afterDuplicate.numbers.includes(historyBehavior.sourceNumber));
@@ -947,7 +1052,7 @@ test("guest entry, invoice editor, responsive layout, draft, print, and offline 
     loadingHidden: document.querySelector('#historyLoadingState').hidden,
     errorHidden: document.querySelector('#historyErrorState').hidden
   })`));
-  assert.equal(paginationBehavior.onlyCustomer, "Needle Customer");
+  assert.equal(paginationBehavior.onlyCustomer, "NEEDLE CUSTOMER");
   assert.equal(paginationBehavior.loadingHidden, true);
   assert.equal(paginationBehavior.errorHidden, true);
   assert.ok(paginationBehavior.calls.some((call) => call.limit === 25 && call.cursor));
@@ -1173,7 +1278,7 @@ test("guest entry, invoice editor, responsive layout, draft, print, and offline 
     legacyDraftRemoved: true,
     legacySequenceRemoved: true,
     remoteCount: 3,
-    draftSummary: "EHR-20260819-100 for Migrated Draft, $88.00",
+    draftSummary: "EHR-20260819-100 for MIGRATED DRAFT, $88.00",
     toast: "Existing browser invoices were moved to your account."
   });
 
@@ -1225,12 +1330,12 @@ test("guest entry, invoice editor, responsive layout, draft, print, and offline 
   assert.match(backendSource, /\.eq\("revision", expectedRevision\)/);
   assert.match(backendSource, /error\.code = "INVOICE_REVISION_CONFLICT"/);
 
-  const cacheReady = await waitFor(() => evaluate(page, "caches.keys().then(keys => keys.includes('invoice-studio-v29'))"));
+  const cacheReady = await waitFor(() => evaluate(page, "caches.keys().then(keys => keys.includes('invoice-studio-v30'))"));
   assert.equal(cacheReady, true);
   const workerSource = await readFile(join(ROOT, "sw.js"), "utf8");
   const handlers = {};
   const deletedCaches = [];
-  const cacheKeys = ["invoice-studio-v1", "invoice-studio-v27", "invoice-studio-v28", "invoice-studio-v29", "unrelated-app-cache"];
+  const cacheKeys = ["invoice-studio-v1", "invoice-studio-v27", "invoice-studio-v28", "invoice-studio-v29", "invoice-studio-v30", "unrelated-app-cache"];
   const workerContext = {
     URL,
     Response,
@@ -1248,7 +1353,7 @@ test("guest entry, invoice editor, responsive layout, draft, print, and offline 
   let activation;
   handlers.activate({ waitUntil: (promise) => { activation = promise; } });
   await activation;
-  assert.deepEqual(deletedCaches, ["invoice-studio-v1", "invoice-studio-v27", "invoice-studio-v28"]);
+  assert.deepEqual(deletedCaches, ["invoice-studio-v1", "invoice-studio-v27", "invoice-studio-v28", "invoice-studio-v29"]);
 
   if (!await evaluate(page, "Boolean(navigator.serviceWorker.controller)")) {
     await page.send("Page.reload", { ignoreCache: true });

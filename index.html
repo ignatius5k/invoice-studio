@@ -9,7 +9,7 @@
     <link rel="manifest" href="./manifest.webmanifest" />
     <link rel="icon" href="./icon-192.png" />
     <link rel="apple-touch-icon" href="./icon-192.png" />
-    <link rel="stylesheet" href="./styles.css?v=29" />
+    <link rel="stylesheet" href="./styles.css?v=30" />
     <title>Invoice Studio</title>
   </head>
   <body>
@@ -188,7 +188,7 @@
             <legend>Bill to</legend>
             <div class="field-stack">
               <label for="billTo">Customer or company name</label>
-              <textarea id="billTo" name="billTo" data-field="billTo" rows="2" maxlength="2000" aria-describedby="billToHelp" required></textarea>
+              <textarea id="billTo" name="billTo" data-field="billTo" rows="2" maxlength="2000" autocapitalize="characters" spellcheck="false" aria-describedby="billToHelp" required></textarea>
               <p id="billToHelp" class="field-help">This appears in the invoice's BILL TO section.</p>
             </div>
           </fieldset>
@@ -383,11 +383,11 @@
 
     <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
     <noscript>This app needs JavaScript to create invoices.</noscript>
-    <script src="./vendor/supabase.js?v=29" defer></script>
-    <script src="./feature-flags.js?v=29" defer></script>
-    <script src="./supabase-config.js?v=29" defer></script>
-    <script src="./backend.js?v=29" defer></script>
-    <script src="./outbox.js?v=29" defer></script>
-    <script src="./app.js?v=29" defer></script>
+    <script src="./vendor/supabase.js?v=30" defer></script>
+    <script src="./feature-flags.js?v=30" defer></script>
+    <script src="./supabase-config.js?v=30" defer></script>
+    <script src="./backend.js?v=30" defer></script>
+    <script src="./outbox.js?v=30" defer></script>
+    <script src="./app.js?v=30" defer></script>
   </body>
 </html>

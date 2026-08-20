@@ -777,7 +777,16 @@ h1 {
 
 .item-row {
   align-items: start;
+  min-width: 0;
   margin-bottom: 9px;
+}
+
+.item-row > *,
+.item-row .mobile-field,
+.item-row input,
+.item-row textarea {
+  min-width: 0;
+  max-width: 100%;
 }
 
 .item-row textarea {
@@ -1516,8 +1525,10 @@ noscript {
 
   .item-row {
     position: relative;
-    grid-template-columns: minmax(64px, 0.75fr) minmax(112px, 1.25fr) 44px;
+    grid-template-columns: minmax(0, 0.75fr) minmax(0, 1.25fr) 44px;
     gap: 12px 9px;
+    width: 100%;
+    max-width: 100%;
     margin: 0;
     padding: 16px 0;
     border-top: 1px solid var(--line);
@@ -1674,6 +1685,9 @@ noscript {
   body {
     width: 210mm;
     height: 297mm;
+    max-height: 297mm;
+    margin: 0 !important;
+    overflow: hidden !important;
     background: #fff;
   }
 
@@ -1695,18 +1709,32 @@ noscript {
     display: block;
     width: 210mm !important;
     height: 297mm !important;
+    max-height: 297mm !important;
     min-height: 0;
     margin: 0;
     padding: 0;
-    overflow: visible;
+    overflow: hidden !important;
     background: #fff;
+    break-inside: avoid;
+    page-break-inside: avoid;
   }
 
   .invoice-sheet {
-    width: 210mm;
-    min-height: 297mm;
+    width: 210mm !important;
+    height: 297mm !important;
+    min-height: 0;
+    max-height: 297mm;
     margin: 0;
+    overflow: hidden;
     box-shadow: none;
     transform: none !important;
+    break-before: avoid;
+    break-after: avoid;
+    break-inside: avoid;
+    page-break-before: avoid;
+    page-break-after: avoid;
+    page-break-inside: avoid;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
   }
 }
