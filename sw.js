@@ -1,16 +1,14 @@
 const CACHE_PREFIX = "invoice-studio-";
-const CACHE_NAME = `${CACHE_PREFIX}v31`;
+const CACHE_NAME = `${CACHE_PREFIX}v34`;
 const APP_SHELL = [
   "./",
   "./index.html",
-  "./styles.css?v=31",
-  "./vendor/html2pdf.bundle.min.js?v=31",
-  "./vendor/supabase.js?v=31",
-  "./feature-flags.js?v=31",
-  "./supabase-config.js?v=31",
-  "./backend.js?v=31",
-  "./outbox.js?v=31",
-  "./app.js?v=31",
+  "./styles.css?v=34",
+  "./redesign.css?v=33",
+  "./vendor/html2pdf.bundle.min.js?v=32",
+  "./backend.js?v=32",
+  "./outbox.js?v=32",
+  "./app.js?v=32",
   "./manifest.webmanifest",
   "./eng-hoon-residences-logo.png",
   "./icon-192.png",
@@ -101,9 +99,7 @@ self.addEventListener("fetch", (event) => {
   if (requestUrl.origin !== self.location.origin) return;
 
   if (event.request.mode === "navigate") {
-    // Authentication callbacks may carry credentials in the query string. They
-    // must never become Cache Storage keys or fall back to a cached callback.
-    event.respondWith(requestUrl.search ? fetch(event.request) : fetchNavigation(event));
+    event.respondWith(fetchNavigation(event));
     return;
   }
 

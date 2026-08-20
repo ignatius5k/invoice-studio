@@ -1,5 +1,5 @@
 /*
-  Content-Security-Policy: default-src 'self'; connect-src 'self' {{SUPABASE_HTTPS_ORIGIN}} {{SUPABASE_WSS_ORIGIN}}; img-src 'self' data: blob:; style-src 'self'; script-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; upgrade-insecure-requests
+  Content-Security-Policy: default-src 'self'; connect-src 'self'; img-src 'self' data: blob:; style-src 'self'; script-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; upgrade-insecure-requests
   Cross-Origin-Opener-Policy: same-origin
   Cross-Origin-Resource-Policy: same-origin
   Permissions-Policy: camera=(), display-capture=(), geolocation=(), microphone=(), payment=(), usb=()
@@ -15,7 +15,4 @@
   Cache-Control: no-cache, must-revalidate
 
 /sw.js
-  Cache-Control: no-cache, no-store, must-revalidate
-
-/supabase-config.js
   Cache-Control: no-cache, no-store, must-revalidate

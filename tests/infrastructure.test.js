@@ -126,11 +126,14 @@ test("activation removes only previous Invoice Studio caches", async () => {
   worker.stores.set("invoice-studio-v29", new Map());
   worker.stores.set("invoice-studio-v30", new Map());
   worker.stores.set("invoice-studio-v31", new Map());
+  worker.stores.set("invoice-studio-v32", new Map());
+  worker.stores.set("invoice-studio-v33", new Map());
+  worker.stores.set("invoice-studio-v34", new Map());
   worker.stores.set("unrelated-cache", new Map());
   let activation;
   worker.handlers.activate({ waitUntil(value) { activation = value; } });
   await activation;
-  assert.deepEqual(worker.deletedCaches, ["invoice-studio-v1", "invoice-studio-v27", "invoice-studio-v28", "invoice-studio-v29", "invoice-studio-v30"]);
+  assert.deepEqual(worker.deletedCaches, ["invoice-studio-v1", "invoice-studio-v27", "invoice-studio-v28", "invoice-studio-v29", "invoice-studio-v30", "invoice-studio-v31", "invoice-studio-v32", "invoice-studio-v33"]);
   assert.equal(worker.clientsClaimed, 1);
   assert.equal(worker.stores.has("unrelated-cache"), true);
 });
@@ -148,7 +151,7 @@ test("query-string navigations are network-only and never cached", async () => {
 });
 
 test("only named-cache shell requests are cached and used offline", async () => {
-  const shellUrl = `${SCOPE}app.js?v=31`;
+  const shellUrl = `${SCOPE}app.js?v=32`;
   const worker = await loadWorker(async () => new Response("fresh shell"));
   const onlineEvent = dispatchFetch(worker.handlers.fetch, {
     method: "GET",
@@ -157,7 +160,7 @@ test("only named-cache shell requests are cached and used offline", async () => 
   });
   assert.equal(await (await onlineEvent.response()).text(), "fresh shell");
   await Promise.all(onlineEvent.lifetime);
-  assert.deepEqual(worker.cachePuts, [{ cacheName: "invoice-studio-v31", key: shellUrl }]);
+  assert.deepEqual(worker.cachePuts, [{ cacheName: "invoice-studio-v34", key: shellUrl }]);
 
   worker.setFetch(async () => { throw new Error("offline"); });
   const offlineEvent = dispatchFetch(worker.handlers.fetch, {
@@ -175,7 +178,7 @@ test("only named-cache shell requests are cached and used offline", async () => 
   assert.equal(unknownEvent.response(), undefined);
 });
 
-test("temporary guest mode skips Auth and persists revision-safe local invoices and drafts", async () => {
+test("device-local backend persists revision-safe invoices and drafts", async () => {
   const source = await readFile(join(ROOT, "backend.js"), "utf8");
   const values = new Map();
   const localStorage = {
@@ -189,15 +192,13 @@ test("temporary guest mode skips Auth and persists revision-safe local invoices 
       values.delete(key);
     },
   };
-  const window = {
-    INVOICE_STUDIO_FEATURES: { temporaryGuestMode: true },
-    localStorage,
-  };
+  const window = { localStorage };
   vm.runInNewContext(source, { window });
   const backend = window.invoiceBackend;
 
   assert.equal(backend.configured, true);
   assert.equal(backend.guestMode, true);
+  assert.equal(backend.localMode, true);
   assert.equal((await backend.getSession()).user.id, "local-guest");
 
   const invoice = {

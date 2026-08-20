@@ -5,16 +5,27 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="theme-color" content="#f2f3f5" />
     <meta name="description" content="Create, save, edit, and duplicate print-ready Eng Hoon Residences invoices." />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' https://*.supabase.co wss://*.supabase.co; img-src 'self'; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self'; img-src 'self'; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'" />
     <link rel="manifest" href="./manifest.webmanifest" />
     <link rel="icon" href="./icon-192.png" />
     <link rel="apple-touch-icon" href="./icon-192.png" />
-    <link rel="stylesheet" href="./styles.css?v=31" />
+    <link rel="stylesheet" href="./styles.css?v=34" />
+    <link rel="stylesheet" href="./redesign.css?v=33" />
     <title>Invoice Studio</title>
   </head>
   <body>
+    <div id="appLoadingScreen" class="app-loading-screen" role="status" aria-live="polite">
+      <div class="app-loading-mark">
+        <img src="./eng-hoon-residences-logo.png" alt="" width="64" height="64" />
+        <div>
+          <strong>Invoice Studio</strong>
+          <span>Preparing your local workspace</span>
+        </div>
+      </div>
+    </div>
+
     <div id="offlineBanner" class="offline-banner" role="status" hidden>
-      You are offline. Reconnect to load or save account data. Printing the open invoice still works.
+      You are offline. Your saved invoices remain available on this device.
     </div>
 
     <header class="app-header">
@@ -27,32 +38,32 @@
       </div>
       <div class="header-actions">
         <button id="installButton" class="button button-secondary" type="button" hidden>Install app</button>
-        <button id="invoiceListButton" class="button button-secondary" type="button" hidden>Back</button>
+        <button id="invoiceListButton" class="button button-secondary" type="button" hidden>Invoices</button>
         <button id="newInvoiceButton" class="button button-secondary" type="button" hidden>New invoice</button>
         <button id="printButton" class="button button-primary" type="button" hidden>Save invoice</button>
         <div id="accountControls" class="account-controls" hidden>
           <div class="account-identity">
             <span id="accountEmail" class="account-email"></span>
-            <span id="syncStatus" class="sync-status" role="status" aria-live="polite">All changes synced</span>
+            <span id="syncStatus" class="sync-status" role="status" aria-live="polite">Saved locally</span>
           </div>
           <button id="signOutButton" class="button button-secondary" type="button">Sign out</button>
         </div>
       </div>
     </header>
 
-    <main id="authPage" class="auth-page" aria-labelledby="authTitle">
+    <main id="authPage" class="auth-page" aria-labelledby="authTitle" hidden>
       <section class="auth-card">
         <div id="authConfigurationState" hidden>
           <p class="auth-label">Setup required</p>
-          <h1 id="configurationTitle">Connect Supabase</h1>
-          <p>Add your Supabase project URL and publishable key to <code>supabase-config.js</code>, then reload the app.</p>
-          <p class="auth-help">Run the included SQL migration first so authentication and row-level security are ready.</p>
+          <h1 id="configurationTitle">Connect an account provider</h1>
+          <p>Account access is not enabled in this build.</p>
+          <p class="auth-help">Invoices remain available locally while a new provider is selected.</p>
         </div>
 
         <div id="authSignInState">
           <p class="auth-label">Invoice Studio</p>
           <h1 id="authTitle">Sign in</h1>
-          <p class="auth-intro">Access invoices and drafts synced to your account.</p>
+          <p class="auth-intro">Access invoices and drafts attached to your account.</p>
           <form id="authForm" class="auth-form">
             <div class="field-stack">
               <label for="authEmail">Email address</label>
@@ -93,7 +104,7 @@
       <section class="history-hero">
         <div>
           <h1 id="invoiceListTitle" tabindex="-1">Invoices</h1>
-          <p class="history-intro">Create, edit, and duplicate invoices synced to your account.</p>
+          <p class="history-intro">Create, edit, and duplicate invoices saved on this device.</p>
         </div>
         <button id="historyNewInvoiceButton" class="button button-primary" type="button">Create invoice</button>
       </section>
@@ -123,6 +134,14 @@
           </div>
         </div>
 
+        <div class="invoice-table-head" aria-hidden="true">
+          <span>Invoice</span>
+          <span>Customer</span>
+          <span>Invoice date</span>
+          <span>Items</span>
+          <span>Total</span>
+          <span>Actions</span>
+        </div>
         <div id="invoiceHistoryList" class="invoice-history-list"></div>
 
         <p id="historyLoadingState" class="history-feedback" role="status" aria-live="polite" hidden>Loading invoices...</p>
@@ -147,7 +166,7 @@
           <button id="loadMoreInvoicesButton" class="button button-secondary" type="button" hidden>Load more</button>
         </div>
       </section>
-      <p class="history-storage-note">Invoices and drafts are protected by your account and stored in Supabase.</p>
+      <p class="history-storage-note">Invoices and drafts are stored in this browser on this device.</p>
     </main>
 
     <main id="editorPage" class="workspace" hidden>
@@ -350,16 +369,16 @@
       <div class="output-dialog-card">
         <p class="auth-label">Draft sync conflict</p>
         <h2 id="draftConflictTitle">Choose which draft to keep</h2>
-        <p id="draftConflictDescription" class="output-dialog-description">This device and your account both have draft changes. Nothing will be overwritten until you choose.</p>
+        <p id="draftConflictDescription" class="output-dialog-description">Two local draft versions were found. Nothing will be overwritten until you choose.</p>
         <div class="output-file-summary">
           <span>This device</span>
           <strong id="localDraftConflictSummary"></strong>
-          <span>Cloud account</span>
+          <span>Previously saved copy</span>
           <strong id="cloudDraftConflictSummary"></strong>
         </div>
         <div class="legacy-migration-actions">
           <button id="keepLocalDraftButton" class="button button-primary" type="button">Keep this device draft</button>
-          <button id="keepCloudDraftButton" class="button button-secondary" type="button">Use cloud draft</button>
+          <button id="keepCloudDraftButton" class="button button-secondary" type="button">Use saved copy</button>
         </div>
       </div>
     </dialog>
@@ -389,11 +408,8 @@
 
     <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
     <noscript>This app needs JavaScript to create invoices.</noscript>
-    <script src="./vendor/supabase.js?v=31" defer></script>
-    <script src="./feature-flags.js?v=31" defer></script>
-    <script src="./supabase-config.js?v=31" defer></script>
-    <script src="./backend.js?v=31" defer></script>
-    <script src="./outbox.js?v=31" defer></script>
-    <script src="./app.js?v=31" defer></script>
+    <script src="./backend.js?v=32" defer></script>
+    <script src="./outbox.js?v=32" defer></script>
+    <script src="./app.js?v=32" defer></script>
   </body>
 </html>

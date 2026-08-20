@@ -7,16 +7,15 @@
     "node": "24.19.0",
     "npm": "11.17.0"
   },
-  "description": "Secure, account-based invoice generator for Eng Hoon Residences.",
+  "description": "Device-local invoice generator for Eng Hoon Residences.",
   "scripts": {
     "build": "npm run verify:vendor && node scripts/build-static.js",
-    "check": "node --check app.js && node --check backend.js && node --check feature-flags.js && node --check outbox.js && node --check supabase-config.js && node --check sw.js && node --check scripts/vendor-manifest.js && node --check scripts/sync-vendor.js && node --check scripts/verify-vendor.js && node --check scripts/build-static.js && node --check tests/browser-backend-mock.js && node --check tests/outbox.test.js && node --check tests/infrastructure.test.js && node --check tests/app.test.js",
+    "check": "node --check app.js && node --check backend.js && node --check outbox.js && node --check sw.js && node --check scripts/vendor-manifest.js && node --check scripts/sync-vendor.js && node --check scripts/verify-vendor.js && node --check scripts/build-static.js && node --check tests/browser-backend-mock.js && node --check tests/outbox.test.js && node --check tests/infrastructure.test.js && node --check tests/app.test.js",
     "sync:vendor": "node scripts/sync-vendor.js",
     "test": "npm run check && node --test --test-concurrency=1 tests/outbox.test.js tests/infrastructure.test.js tests/app.test.js",
     "verify:vendor": "node scripts/verify-vendor.js"
   },
   "dependencies": {
-    "@supabase/supabase-js": "2.112.3",
     "html2pdf.js": "0.14.0"
   }
 }

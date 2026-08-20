@@ -1126,7 +1126,6 @@ input[readonly] {
 .invoice-table tbody td:nth-child(2) {
   overflow-wrap: anywhere;
   white-space: pre-wrap;
-  text-transform: uppercase;
   word-break: break-word;
 }
 

@@ -162,10 +162,10 @@ test("guest entry, invoice editor, responsive layout, draft, print, and offline 
     guestMode: true,
     authHidden: true,
     historyVisible: true,
-    accountLabel: "Local guest",
+    accountLabel: "This device",
     signOutHidden: true,
-    syncStatus: "Saved on this device",
-    storageNote: "Temporary guest mode: invoices and drafts stay in this browser and are not synced to another device.",
+    syncStatus: "Saved locally",
+    storageNote: "Invoices and drafts are stored in this browser on this device.",
   });
 
   const backendMock = await readFile(join(ROOT, "tests", "browser-backend-mock.js"), "utf8");
@@ -204,7 +204,7 @@ test("guest entry, invoice editor, responsive layout, draft, print, and offline 
     label: document.querySelector('#invoiceListButton').textContent,
     afterInstall: Boolean(document.querySelector('#installButton').compareDocumentPosition(document.querySelector('#invoiceListButton')) & Node.DOCUMENT_POSITION_FOLLOWING)
   })`));
-  assert.deepEqual(backNavigation, { label: "Back", afterInstall: true });
+  assert.deepEqual(backNavigation, { label: "Invoices", afterInstall: true });
   const cleanDraft = await evaluate(page, `JSON.stringify({
     invoiceNumber: document.querySelector('#invoiceNumber').value,
     pdfFileName: document.querySelector('#pdfFileName').value,
@@ -229,7 +229,7 @@ test("guest entry, invoice editor, responsive layout, draft, print, and offline 
   assert.deepEqual({ billTo: initial.billTo, description: initial.description, price: initial.price }, { billTo: "", description: "", price: "" });
 
   await evaluate(page, `(() => {
-    localStorage.setItem('test-supabase-draft', JSON.stringify({
+    localStorage.setItem('test-remote-draft', JSON.stringify({
       revision: 1,
       invoice: {
         draftDirty: false,
@@ -416,15 +416,15 @@ test("guest entry, invoice editor, responsive layout, draft, print, and offline 
     assert.ok(measured.documentWidth <= measured.viewport, `${width}px layout must not overflow`);
     if (measured.button.width > 0) assert.ok(measured.button.left >= 0 && measured.button.right <= measured.viewport && measured.button.width <= 44.1);
     assert.equal(measured.label, "Remove item 1");
-    assert.equal(measured.workspaceColumns, width <= 1200 ? 1 : 2, `${width}px workspace column count`);
-    assert.equal(measured.previewJumpVisible, width <= 1200, `${width}px preview jump visibility`);
+    assert.equal(measured.workspaceColumns, width <= 1359 ? 1 : 2, `${width}px workspace column count`);
+    assert.equal(measured.previewJumpVisible, width <= 1359, `${width}px preview jump visibility`);
     assert.equal(measured.mobileActionsVisible, width <= 767, `${width}px mobile output visibility`);
     assert.ok(measured.filenameControl.fieldLeft >= measured.filenameControl.sectionLeft - 1);
     assert.ok(measured.filenameControl.fieldRight <= measured.filenameControl.sectionRight + 1);
     assert.ok(measured.filenameControl.toggleLeft >= measured.filenameControl.sectionLeft - 1);
     assert.ok(measured.filenameControl.toggleRight <= measured.filenameControl.sectionRight + 1);
     assert.ok(measured.filenameControl.toggleHeight >= 44);
-    if (width <= 1200) {
+    if (width <= 1359) {
       assert.ok(measured.editorWidth <= 720.1, `${width}px editor should remain constrained`);
       assert.equal(measured.headingDirection, "column", `${width}px save status should group with heading`);
       assert.ok(measured.headingGap <= 8.1, `${width}px heading/save gap should remain close`);
@@ -465,7 +465,7 @@ test("guest entry, invoice editor, responsive layout, draft, print, and offline 
     install.hidden = true;
     return JSON.stringify(result);
   })()`));
-  assert.deepEqual(narrowHeader, { fits: true, height: 72, subtitleVisible: false, desktopSaveVisible: false, mobileSaveVisible: true });
+  assert.deepEqual(narrowHeader, { fits: true, height: 66, subtitleVisible: false, desktopSaveVisible: false, mobileSaveVisible: true });
 
   await page.send("Emulation.setDeviceMetricsOverride", { width: 320, height: 640, deviceScaleFactor: 1, mobile: true });
   const previewClickStart = JSON.parse(await evaluate(page, `(() => {
@@ -593,6 +593,29 @@ test("guest entry, invoice editor, responsive layout, draft, print, and offline 
   })()`);
   assert.equal(longDescriptionFits, true);
 
+  const itemNameCasing = JSON.parse(await evaluate(page, `(() => {
+    const description = document.querySelector('[data-item-field="description"]');
+    description.value = 'Weekend Market Space';
+    description.dispatchEvent(new Event('input', { bubbles: true }));
+    const preview = document.querySelector('#previewItems td:nth-child(2)');
+    return JSON.stringify({
+      editorValue: description.value,
+      previewValue: preview.textContent,
+      editorTransform: getComputedStyle(description).textTransform,
+      previewTransform: getComputedStyle(preview).textTransform,
+      readOnly: description.readOnly,
+      disabled: description.disabled
+    });
+  })()`));
+  assert.deepEqual(itemNameCasing, {
+    editorValue: "Weekend Market Space",
+    previewValue: "Weekend Market Space",
+    editorTransform: "none",
+    previewTransform: "none",
+    readOnly: false,
+    disabled: false,
+  });
+
   const multilineDescription = JSON.parse(await evaluate(page, `(() => {
     const description = document.querySelector('[data-item-field="description"]');
     description.value = 'First line\\nSecond line';
@@ -683,10 +706,10 @@ test("guest entry, invoice editor, responsive layout, draft, print, and offline 
     document.querySelector('#clearDraftButton').click();
     while (document.querySelector('#invoiceNumber').value === before) await new Promise(resolve => setTimeout(resolve, 0));
   })()`);
-  assert.equal(await evaluate(page, "localStorage.getItem('test-supabase-draft')"), null);
+  assert.equal(await evaluate(page, "localStorage.getItem('test-remote-draft')"), null);
   assert.match(await evaluate(page, "document.querySelector('#invoiceNumber').value"), /^EHR-\d{8}-\d{3,}$/);
   await evaluate(page, "window.dispatchEvent(new PageTransitionEvent('pagehide'))");
-  assert.equal(await evaluate(page, "localStorage.getItem('test-supabase-draft')"), null);
+  assert.equal(await evaluate(page, "localStorage.getItem('test-remote-draft')"), null);
 
   const metadataOnlyProtection = JSON.parse(await evaluate(page, `(async () => {
     const number = document.querySelector('#invoiceNumber');
@@ -898,7 +921,7 @@ test("guest entry, invoice editor, responsive layout, draft, print, and offline 
   await waitFor(() => evaluate(page, "typeof window.html2pdf === 'function'"));
   assert.equal(
     await evaluate(page, "document.querySelector('script[data-pdf-library=\"html2pdf\"]')?.getAttribute('src')"),
-    "./vendor/html2pdf.bundle.min.js?v=31",
+    "./vendor/html2pdf.bundle.min.js?v=32",
   );
   await waitFor(async () => {
     try {
@@ -1011,7 +1034,7 @@ test("guest entry, invoice editor, responsive layout, draft, print, and offline 
   assert.equal(historyBehavior.initial.total, "$50.00");
   assert.equal(historyBehavior.initial.titleTag, "H3");
   assert.ok(historyBehavior.initial.semanticLabel);
-  assert.equal(historyBehavior.initial.createActions, 1);
+  assert.equal(historyBehavior.initial.createActions, 2);
   assert.deepEqual(historyBehavior.afterEdit, { count: 1, customer: "UPDATED CUSTOMER" });
   assert.notEqual(historyBehavior.duplicate.number, historyBehavior.sourceNumber);
   assert.equal(historyBehavior.duplicate.customer, "UPDATED CUSTOMER");
@@ -1027,7 +1050,7 @@ test("guest entry, invoice editor, responsive layout, draft, print, and offline 
     customer.value = 'Unsaved customer change';
     customer.dispatchEvent(new Event('input', { bubbles: true }));
     document.querySelector('#invoiceListButton').click();
-    while (localStorage.getItem('test-supabase-draft') === null) await new Promise(resolve => setTimeout(resolve, 0));
+    while (localStorage.getItem('test-remote-draft') === null) await new Promise(resolve => setTimeout(resolve, 0));
     const noticeBefore = !document.querySelector('#draftNotice').hidden;
     const actionsAdjacent = document.querySelector('#continueDraftButton').parentElement === document.querySelector('#deleteDraftButton').parentElement;
     let confirmations = 0;
@@ -1035,7 +1058,7 @@ test("guest entry, invoice editor, responsive layout, draft, print, and offline 
     document.querySelector('#deleteDraftButton').click();
     const afterCancel = {
       noticeVisible: !document.querySelector('#draftNotice').hidden,
-      draftStored: localStorage.getItem('test-supabase-draft') !== null
+      draftStored: localStorage.getItem('test-remote-draft') !== null
     };
     window.confirm = () => { confirmations += 1; return true; };
     document.querySelector('#deleteDraftButton').click();
@@ -1047,7 +1070,7 @@ test("guest entry, invoice editor, responsive layout, draft, print, and offline 
       confirmations,
       afterCancel,
       noticeAfter: !document.querySelector('#draftNotice').hidden,
-      draftStoredAfter: localStorage.getItem('test-supabase-draft') !== null,
+      draftStoredAfter: localStorage.getItem('test-remote-draft') !== null,
       historyCountAfter: document.querySelectorAll('.invoice-record').length,
       toast: document.querySelector('#toast').textContent
     });
@@ -1065,7 +1088,7 @@ test("guest entry, invoice editor, responsive layout, draft, print, and offline 
   });
 
   await evaluate(page, `(() => {
-    localStorage.setItem('test-original-invoices', localStorage.getItem('test-supabase-invoices'));
+    localStorage.setItem('test-original-invoices', localStorage.getItem('test-remote-invoices'));
     const records = Array.from({ length: 31 }, (_, index) => ({
       id: 'pagination-' + String(index).padStart(2, '0'),
       revision: 1,
@@ -1080,7 +1103,7 @@ test("guest entry, invoice editor, responsive layout, draft, print, and offline 
         items: [{ id: 'item-' + index, quantity: 1, description: 'Market space', price: '25' }]
       }
     }));
-    localStorage.setItem('test-supabase-invoices', JSON.stringify(records));
+    localStorage.setItem('test-remote-invoices', JSON.stringify(records));
     location.reload();
   })()`);
   await waitFor(() => evaluate(page, "document.body.dataset.page === 'history' && document.querySelectorAll('.invoice-record').length === 25 && !document.querySelector('#loadMoreInvoicesButton').hidden"));
@@ -1104,7 +1127,7 @@ test("guest entry, invoice editor, responsive layout, draft, print, and offline 
   assert.ok(paginationBehavior.calls.some((call) => call.limit === 25 && call.cursor));
   assert.ok(paginationBehavior.calls.some((call) => call.query === "Needle Customer"));
   await evaluate(page, `(() => {
-    localStorage.setItem('test-supabase-invoices', localStorage.getItem('test-original-invoices'));
+    localStorage.setItem('test-remote-invoices', localStorage.getItem('test-original-invoices'));
     localStorage.removeItem('test-original-invoices');
     location.reload();
   })()`);
@@ -1155,7 +1178,7 @@ test("guest entry, invoice editor, responsive layout, draft, print, and offline 
     title: document.querySelector('#authTitle').textContent,
     historyHidden: document.querySelector('#invoiceListPage').hidden,
     accountHidden: document.querySelector('#accountControls').hidden,
-    remoteInvoices: JSON.parse(localStorage.getItem('test-supabase-invoices') || '[]').length,
+    remoteInvoices: JSON.parse(localStorage.getItem('test-remote-invoices') || '[]').length,
     passwordMinimum: document.querySelector('#authPassword').minLength,
     emailValue: document.querySelector('#authEmail').value,
     passwordValue: document.querySelector('#authPassword').value,
@@ -1242,7 +1265,7 @@ test("guest entry, invoice editor, responsive layout, draft, print, and offline 
     };
     document.querySelector('#createAccountButton').click();
   })()`);
-  await waitFor(() => evaluate(page, "document.querySelector('#authMessage').textContent.includes('applies across all email addresses')"));
+  await waitFor(() => evaluate(page, "document.querySelector('#authMessage').textContent.includes('email service limit')"));
   const sharedQuotaState = JSON.parse(await evaluate(page, `(() => {
     const email = document.querySelector('#authEmail');
     email.value = 'another-address@example.com';
@@ -1315,7 +1338,7 @@ test("guest entry, invoice editor, responsive layout, draft, print, and offline 
     legacyHistoryRemoved: localStorage.getItem('invoice-studio-history-v1') === null,
     legacyDraftRemoved: localStorage.getItem('invoice-studio-draft-v1') === null,
     legacySequenceRemoved: localStorage.getItem('invoice-studio-sequence-v1') === null,
-    remoteCount: JSON.parse(localStorage.getItem('test-supabase-invoices') || '[]').length,
+    remoteCount: JSON.parse(localStorage.getItem('test-remote-invoices') || '[]').length,
     draftSummary: document.querySelector('#draftNoticeSummary').textContent,
     toast: document.querySelector('#toast').textContent
   })`));
@@ -1354,34 +1377,17 @@ test("guest entry, invoice editor, responsive layout, draft, print, and offline 
     draftCode: "DRAFT_REVISION_CONFLICT",
   });
 
-  const migrationSql = await readFile(join(ROOT, "supabase/migrations/20260819084659_invoice_studio.sql"), "utf8");
-  assert.match(migrationSql, /alter table public\.invoices enable row level security;/);
-  assert.match(migrationSql, /alter table public\.invoice_drafts enable row level security;/);
-  assert.match(migrationSql, /alter table public\.invoice_revisions enable row level security;/);
-  assert.match(migrationSql, /to authenticated\s+using \(\(select auth\.uid\(\)\) = user_id\);/);
-  assert.match(migrationSql, /revoke all on table public\.invoices from anon, authenticated;/);
-  assert.match(migrationSql, /revoke all on table public\.invoice_counters from anon, authenticated;/);
-  assert.match(migrationSql, /create or replace function public\.next_invoice_number[\s\S]+security definer\s+set search_path = ''/);
-  assert.match(migrationSql, /create or replace function public\.invoice_items_are_valid[\s\S]+octet_length\(p_items::text\) > 16000/);
-  assert.match(migrationSql, /create or replace function public\.invoice_draft_is_valid[\s\S]+octet_length\(p_invoice::text\) > 24000/);
-  assert.match(migrationSql, /revision integer not null default 1/);
-  assert.match(migrationSql, /constraint invoices_user_invoice_number_key unique \(user_id, invoice_number\)/);
-  assert.match(migrationSql, /create table public\.invoice_revisions/);
-  assert.match(migrationSql, /INVOICE_REVISION_CONFLICT/);
-  assert.match(migrationSql, /maximum 2000 invoices per account/);
-  assert.match(migrationSql, /create or replace function public\.list_invoices_page/);
-  assert.match(migrationSql, /list_invoices_page[\s\S]+security invoker\s+set search_path = ''/);
-  assert.match(migrationSql, /grant execute on function public\.list_invoices_page[\s\S]+to authenticated;/);
   const backendSource = await readFile(join(ROOT, "backend.js"), "utf8");
-  assert.match(backendSource, /\.eq\("revision", expectedRevision\)/);
+  assert.match(backendSource, /invoice-studio-history-v1/);
+  assert.match(backendSource, /localMode: true/);
   assert.match(backendSource, /error\.code = "INVOICE_REVISION_CONFLICT"/);
 
-  const cacheReady = await waitFor(() => evaluate(page, "caches.keys().then(keys => keys.includes('invoice-studio-v31'))"));
+  const cacheReady = await waitFor(() => evaluate(page, "caches.keys().then(keys => keys.includes('invoice-studio-v34'))"));
   assert.equal(cacheReady, true);
   const workerSource = await readFile(join(ROOT, "sw.js"), "utf8");
   const handlers = {};
   const deletedCaches = [];
-  const cacheKeys = ["invoice-studio-v1", "invoice-studio-v27", "invoice-studio-v28", "invoice-studio-v29", "invoice-studio-v30", "invoice-studio-v31", "unrelated-app-cache"];
+  const cacheKeys = ["invoice-studio-v1", "invoice-studio-v27", "invoice-studio-v28", "invoice-studio-v29", "invoice-studio-v30", "invoice-studio-v31", "invoice-studio-v32", "invoice-studio-v33", "invoice-studio-v34", "unrelated-app-cache"];
   const workerContext = {
     URL,
     Response,
@@ -1399,7 +1405,7 @@ test("guest entry, invoice editor, responsive layout, draft, print, and offline 
   let activation;
   handlers.activate({ waitUntil: (promise) => { activation = promise; } });
   await activation;
-  assert.deepEqual(deletedCaches, ["invoice-studio-v1", "invoice-studio-v27", "invoice-studio-v28", "invoice-studio-v29", "invoice-studio-v30"]);
+  assert.deepEqual(deletedCaches, ["invoice-studio-v1", "invoice-studio-v27", "invoice-studio-v28", "invoice-studio-v29", "invoice-studio-v30", "invoice-studio-v31", "invoice-studio-v32", "invoice-studio-v33"]);
 
   if (!await evaluate(page, "Boolean(navigator.serviceWorker.controller)")) {
     await page.send("Page.reload", { ignoreCache: true });

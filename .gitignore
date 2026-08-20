@@ -4,6 +4,7 @@ node_modules/
 dist/
 .playwright-mcp/
 design-directions/
+redesign-drafts/*.png
 .DS_Store
 Thumbs.db
 *.log

@@ -9,7 +9,7 @@ const MAX_ITEM_DESCRIPTION_LENGTH = 1000;
 const MAX_BILL_TO_LENGTH = 2000;
 const HISTORY_PAGE_SIZE = 25;
 const DRAFT_RETRY_MAX_DELAY = 30000;
-const PDF_LIBRARY_URL = "./vendor/html2pdf.bundle.min.js?v=31";
+const PDF_LIBRARY_URL = "./vendor/html2pdf.bundle.min.js?v=32";
 const backend = window.invoiceBackend;
 const draftOutbox = window.invoiceDraftOutbox;
 
@@ -21,6 +21,7 @@ const paperScaleWrap = document.querySelector("#paperScaleWrap");
 const invoiceSheet = document.querySelector("#invoiceSheet");
 const saveStatus = document.querySelector("#saveStatus");
 const toast = document.querySelector("#toast");
+const appLoadingScreen = document.querySelector("#appLoadingScreen");
 const installButton = document.querySelector("#installButton");
 const offlineBanner = document.querySelector("#offlineBanner");
 const outputDialog = document.querySelector("#outputDialog");
@@ -253,7 +254,7 @@ function authFailureMessage(error, action) {
     const retrySeconds = authEmailRetrySeconds(error);
     return retrySeconds
       ? `A confirmation or reset email was requested too recently. Wait ${retrySeconds} seconds and use the newest email.`
-      : "This app's shared Supabase email limit has been reached. It applies across all email addresses. Use the newest email already received, or try again after the hourly allowance resets.";
+      : "The email service limit has been reached. Use the newest email already received, or try again after the hourly allowance resets.";
   }
   if (Number(error?.status) === 429 || code === "over_request_rate_limit") {
     return action === "sign-in"
@@ -369,7 +370,7 @@ function showConfigurationPage() {
   passwordRecoveryForm.hidden = true;
   authPage.setAttribute("aria-labelledby", "configurationTitle");
   document.body.dataset.page = "auth";
-  document.title = "Connect Supabase | Invoice Studio";
+  document.title = "Connect account | Invoice Studio";
   setAuthMessage();
 }
 
@@ -492,13 +493,13 @@ function setDraftSyncStatus(stateName, message) {
   let visibleMessage = message;
   if (backend.guestMode) {
     if (stateName === "syncing") visibleMessage = "Saving on this device...";
-    if (stateName === "waiting" || stateName === "synced") visibleMessage = "Saved on this device";
+    if (stateName === "waiting" || stateName === "synced") visibleMessage = "Saved locally";
   }
   syncStatus.textContent = visibleMessage;
   syncStatus.dataset.state = stateName;
 }
 
-function draftSummary(invoice, fallback = "No cloud draft") {
+function draftSummary(invoice, fallback = "No saved draft") {
   if (!invoice) return fallback;
   const customer = String(invoice.billTo || "").trim() || "Untitled invoice";
   return `${invoice.invoiceNumber || "Draft"} for ${customer}`;
@@ -508,10 +509,10 @@ function promptForDraftConflict(operation, remoteDraftRecord) {
   draftConflictOperation = operation;
   draftConflictRemote = remoteDraftRecord;
   localDraftConflictSummary.textContent = operation.type === "delete"
-    ? "Delete the cloud draft"
+    ? "Delete the saved draft"
     : draftSummary(operation.invoice);
   cloudDraftConflictSummary.textContent = draftSummary(remoteDraftRecord?.invoice);
-  setDraftSyncStatus("conflict", "Draft sync needs your choice");
+  setDraftSyncStatus("conflict", "Choose which local draft to keep");
   if (!draftConflictDialog.open) draftConflictDialog.showModal();
   return new Promise((resolve) => {
     resolveDraftConflictChoice = resolve;
@@ -592,7 +593,7 @@ async function applyDraftConflictChoice(operation, remoteDraftRecord, choice) {
     draftChanged = Boolean(state.draftDirty);
     draftPersistenceEnabled = true;
   } else {
-    state = await createCloudInvoiceDraft();
+    state = await createLocalInvoiceDraft();
     state.draftDirty = false;
     draftChanged = false;
     draftPersistenceEnabled = false;
@@ -610,7 +611,7 @@ async function handleDraftConflict(operation) {
   } catch {
     const attempts = Number(operation.attempts || 0) + 1;
     const delay = retryDelay(attempts);
-    await draftOutbox.markRetry(operation.userId, operation.operationId, attempts, Date.now() + delay, "Could not load cloud draft.");
+    await draftOutbox.markRetry(operation.userId, operation.operationId, attempts, Date.now() + delay, "Could not load the saved draft.");
     setDraftSyncStatus("error", "Draft safe on this device. Sync retrying");
     scheduleDraftRetry(delay);
     return;
@@ -639,7 +640,7 @@ async function runDraftOutboxSync(force = false) {
     return false;
   }
 
-  setDraftSyncStatus("syncing", operation.type === "delete" ? "Deleting cloud draft..." : "Syncing draft...");
+  setDraftSyncStatus("syncing", operation.type === "delete" ? "Deleting saved draft..." : "Saving draft...");
   const expectedRevision = Number.isInteger(operation.expectedRevision) ? operation.expectedRevision : undefined;
   try {
     const result = operation.type === "delete"
@@ -797,15 +798,15 @@ async function loadAuthenticatedWorkspace(session) {
   workspaceLoading = true;
   if (currentUser?.id && currentUser.id !== session.user.id) neutralizeDraftWrites();
   currentUser = session.user;
-  accountEmail.textContent = backend.guestMode ? "Local guest" : (session.user.email || "Signed in");
+  accountEmail.textContent = backend.guestMode ? "This device" : (session.user.email || "Signed in");
   signOutButton.hidden = Boolean(backend.guestMode);
   historyIntro.textContent = backend.guestMode
     ? "Create, edit, and duplicate invoices saved on this device."
     : "Create, edit, and duplicate invoices synced to your account.";
   historyStorageNote.textContent = backend.guestMode
-    ? "Temporary guest mode: invoices and drafts stay in this browser and are not synced to another device."
-    : "Invoices and drafts are protected by your account and stored in Supabase.";
-  if (backend.guestMode) setDraftSyncStatus("synced", "Saved on this device");
+    ? "Invoices and drafts are stored in this browser on this device."
+    : "Invoices and drafts are protected by your account.";
+  if (backend.guestMode) setDraftSyncStatus("synced", "Saved locally");
   accountControls.hidden = false;
   authPage.hidden = false;
   setAuthMessage("Loading your invoices...");
@@ -826,7 +827,7 @@ async function loadAuthenticatedWorkspace(session) {
     historyTotal = Number.isFinite(Number(historyPage.total)) ? Number(historyPage.total) : invoiceHistory.length;
     historyLoadError = false;
     const reconciledDraftRecord = await reconcileDraftOutbox(currentUser.id, remoteDraftRecord);
-    state = normalizeInvoiceData(reconciledDraftRecord?.invoice) || await createCloudInvoiceDraft();
+    state = normalizeInvoiceData(reconciledDraftRecord?.invoice) || await createLocalInvoiceDraft();
     draftRevision = Number.isInteger(reconciledDraftRecord?.revision) ? reconciledDraftRecord.revision : undefined;
     draftChanged = Boolean(state.draftDirty);
     draftPersistenceEnabled = Boolean(reconciledDraftRecord);
@@ -991,6 +992,9 @@ async function initializeApplication() {
   } catch (error) {
     showSignedOutPage();
     setAuthMessage(error?.message || "Authentication is unavailable. Try again.", "error");
+  } finally {
+    appLoadingScreen.classList.add("is-ready");
+    window.setTimeout(() => { appLoadingScreen.hidden = true; }, 220);
   }
 }
 
@@ -1018,8 +1022,8 @@ function createInvoiceDraft(invoiceNumberOverride) {
   };
 }
 
-async function createCloudInvoiceDraft() {
-  if (!currentUser) throw new Error("Sign in before creating an invoice.");
+async function createLocalInvoiceDraft() {
+  if (!currentUser) throw new Error("Open the local workspace before creating an invoice.");
   const today = isoDate(new Date());
   const invoiceNumber = await backend.nextInvoiceNumber(today);
   return createInvoiceDraft(invoiceNumber);
@@ -1132,7 +1136,7 @@ function historyRecordId() {
   return `invoice-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-async function deleteCloudDraft() {
+async function deleteStoredDraft() {
   clearTimeout(saveTimer);
   if (!currentUser) return true;
   const userId = currentUser.id;
@@ -1145,7 +1149,7 @@ async function deleteCloudDraft() {
 
 async function saveCurrentInvoiceToHistory() {
   if (!currentUser) {
-    showToast("Sign in before saving an invoice.");
+    showToast("Open the local workspace before saving an invoice.");
     return false;
   }
   const now = new Date().toISOString();
@@ -1172,13 +1176,13 @@ async function saveCurrentInvoiceToHistory() {
       showToast("That invoice number is already in use. Choose a unique invoice number and save again.");
     } else {
       saveStatus.textContent = "Could not save invoice";
-      showToast("The invoice could not be saved. Check your connection and try again.");
+      showToast("The invoice could not be saved. Check browser storage and try again.");
     }
     return false;
   }
 
   try {
-    await deleteCloudDraft();
+    await deleteStoredDraft();
   } catch {
     // The invoice is already safely stored. The durable outbox will retry the
     // draft deletion, and sign-out remains blocked until it succeeds.
@@ -1290,6 +1294,9 @@ function showEditorPage(mode = "new", focusEditor = true) {
   invoiceListButton.hidden = false;
   newInvoiceButton.hidden = false;
   printButton.hidden = false;
+  invoiceListButton.removeAttribute("aria-current");
+  if (mode === "new" || mode === "duplicate") newInvoiceButton.setAttribute("aria-current", "page");
+  else newInvoiceButton.removeAttribute("aria-current");
   editorTitle.textContent = mode === "edit" ? "Edit invoice" : mode === "duplicate" ? "Review duplicated invoice" : "Create an invoice";
   document.title = state.invoiceNumber ? `${state.invoiceNumber} | Invoice Studio` : "Invoice Studio";
   window.scrollTo({ top: 0 });
@@ -1305,9 +1312,11 @@ function showInvoiceList(focusHeading = true) {
   document.body.dataset.page = "history";
   editorPage.hidden = true;
   invoiceListPage.hidden = false;
-  invoiceListButton.hidden = true;
-  newInvoiceButton.hidden = true;
+  invoiceListButton.hidden = false;
+  newInvoiceButton.hidden = false;
   printButton.hidden = true;
+  invoiceListButton.setAttribute("aria-current", "page");
+  newInvoiceButton.removeAttribute("aria-current");
   document.title = "Invoices | Invoice Studio";
   renderInvoiceHistory();
   window.scrollTo({ top: 0 });
@@ -1340,9 +1349,9 @@ async function duplicateSavedInvoice(id) {
   clearValidationErrors();
   let freshInvoice;
   try {
-    freshInvoice = await createCloudInvoiceDraft();
+    freshInvoice = await createLocalInvoiceDraft();
   } catch {
-    showToast("A new invoice number could not be created. Check your connection and try again.");
+    showToast("A new invoice number could not be created. Check browser storage and try again.");
     return;
   }
   state = {
@@ -1690,10 +1699,10 @@ async function newInvoice() {
   if (!canReplaceCurrentDraft("Start a new invoice and replace the current unsaved draft?")) return;
   clearValidationErrors();
   try {
-    await deleteCloudDraft();
-    state = await createCloudInvoiceDraft();
+    await deleteStoredDraft();
+    state = await createLocalInvoiceDraft();
   } catch {
-    showToast("A new invoice could not be created. Check your connection and try again.");
+    showToast("A new invoice could not be created. Check browser storage and try again.");
     return;
   }
   draftChanged = false;
@@ -1705,19 +1714,19 @@ async function newInvoice() {
 }
 
 async function clearSavedDraft() {
-  if (!window.confirm("Delete this draft from your account?")) return;
+  if (!window.confirm("Delete this draft from this device?")) return;
   if (!await resetDraft()) return;
   saveStatus.textContent = "Saved draft cleared";
-  showToast("Draft deleted from your account.");
+  showToast("Draft deleted from this device.");
 }
 
 async function resetDraft() {
   clearTimeout(saveTimer);
   try {
-    await deleteCloudDraft();
-    state = await createCloudInvoiceDraft();
+    await deleteStoredDraft();
+    state = await createLocalInvoiceDraft();
   } catch {
-    showToast("The draft could not be deleted. Check your connection and try again.");
+    showToast("The draft could not be deleted. Check browser storage and try again.");
     return false;
   }
   draftChanged = false;

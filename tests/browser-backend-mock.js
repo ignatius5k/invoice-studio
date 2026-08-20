@@ -1,7 +1,7 @@
 (function installBrowserBackendMock() {
-  const REMOTE_HISTORY_KEY = "test-supabase-invoices";
-  const REMOTE_DRAFT_KEY = "test-supabase-draft";
-  const REMOTE_COUNTER_KEY = "test-supabase-counters";
+  const REMOTE_HISTORY_KEY = "test-remote-invoices";
+  const REMOTE_DRAFT_KEY = "test-remote-draft";
+  const REMOTE_COUNTER_KEY = "test-remote-counters";
   let session = { user: { id: "test-user-1", email: "owner@example.com" } };
   let authCallback;
   const controls = {
@@ -27,11 +27,6 @@
     error.status = details.status;
     throw error;
   }
-
-  window.INVOICE_STUDIO_SUPABASE = {
-    url: "https://test-project.supabase.co",
-    publishableKey: "sb_publishable_test",
-  };
 
   function read(key, fallback) {
     try {
